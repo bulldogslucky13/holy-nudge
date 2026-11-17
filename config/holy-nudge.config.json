@@ -1,0 +1,12 @@
+{
+  "processId": "37",
+  "excludedQueues": [
+    "DONE- do not move here unless you have left a note",
+    "Not Interested"
+  ],
+  "adminsByQueue": {},
+  "timeZone": "America/Chicago",
+  "morningHour": 8,
+  "dataSource": "fixture",
+  "chmsBaseUrl": "https://wildwood.ccbchurch.com"
+}

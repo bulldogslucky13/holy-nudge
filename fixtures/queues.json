@@ -1,0 +1,85 @@
+{
+  "processId": "37",
+  "queues": [
+    {
+      "id": "1",
+      "name": "Welcome Email - Campus",
+      "managerIds": []
+    },
+    {
+      "id": "2",
+      "name": "Welcome Email - Wildwood",
+      "managerIds": []
+    },
+    {
+      "id": "3",
+      "name": "Connect Card Coordinators",
+      "managerIds": [
+        "M201"
+      ]
+    },
+    {
+      "id": "4",
+      "name": "Outreach Team",
+      "managerIds": [
+        "M202"
+      ]
+    },
+    {
+      "id": "5",
+      "name": "Staff",
+      "managerIds": [
+        "M201"
+      ]
+    },
+    {
+      "id": "6",
+      "name": "Bible Study Hosts & Events Team",
+      "managerIds": [
+        "M202"
+      ]
+    },
+    {
+      "id": "7",
+      "name": "Service Team",
+      "managerIds": [
+        "M202"
+      ]
+    },
+    {
+      "id": "8",
+      "name": "Sunday Morning Team",
+      "managerIds": [
+        "M202"
+      ]
+    },
+    {
+      "id": "9",
+      "name": "Interested",
+      "managerIds": [
+        "M201"
+      ]
+    },
+    {
+      "id": "10",
+      "name": "Maybe Interested?",
+      "managerIds": [
+        "M201"
+      ]
+    },
+    {
+      "id": "11",
+      "name": "DONE- do not move here unless you have left a note",
+      "managerIds": [
+        "M201"
+      ]
+    },
+    {
+      "id": "12",
+      "name": "Not Interested",
+      "managerIds": [
+        "M201"
+      ]
+    }
+  ]
+}
