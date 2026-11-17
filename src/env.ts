@@ -12,7 +12,7 @@ export interface Env {
   VAPID_SUBJECT?: string;
   /** Cron Worker only: shared secret for POST /run. Secret. */
   JOB_TRIGGER_KEY?: string;
-  /** Optional override for building personal links (defaults to the request origin / production URL). */
+  /** Optional override for building personal links (default: the production URL, or the origin on localhost). */
   APP_BASE_URL?: string;
   /**
    * Live ChMS connection (dataSource "pushpay"). Optional so fixture mode runs without them;
@@ -30,3 +30,14 @@ export interface Env {
 }
 
 export const DEFAULT_APP_BASE_URL = 'https://holynudge.cameronbristol.xyz';
+
+/**
+ * Base URL for personal links. Links always point at the custom domain, even when the request
+ * came in on *.pages.dev, except during local development where the local origin is used.
+ */
+export function appBaseUrl(env: Pick<Env, 'APP_BASE_URL'>, requestUrl: string): string {
+  if (env.APP_BASE_URL) return env.APP_BASE_URL.replace(/\/+$/, '');
+  const url = new URL(requestUrl);
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  return local ? url.origin : DEFAULT_APP_BASE_URL;
+}

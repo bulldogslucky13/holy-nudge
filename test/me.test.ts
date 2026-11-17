@@ -95,3 +95,14 @@ describe('subscription validation', () => {
     expect(parseSubscription({ endpoint: 'https://fcm.googleapis.com/x', keys: { ...keys, auth: 'AA' } })).toBeNull();
   });
 });
+
+describe('appBaseUrl', () => {
+  it('uses the custom domain for personal links, even on pages.dev', async () => {
+    const { appBaseUrl } = await import('../src/env');
+    expect(appBaseUrl({}, 'https://holy-nudge.pages.dev/api/me')).toBe('https://holynudge.cameronbristol.xyz');
+    expect(appBaseUrl({}, 'https://abc123.holy-nudge.pages.dev/api/me')).toBe('https://holynudge.cameronbristol.xyz');
+    expect(appBaseUrl({}, 'https://holynudge.cameronbristol.xyz/api/me')).toBe('https://holynudge.cameronbristol.xyz');
+    expect(appBaseUrl({}, 'http://localhost:8788/api/me')).toBe('http://localhost:8788');
+    expect(appBaseUrl({ APP_BASE_URL: 'https://example.test/' }, 'https://holy-nudge.pages.dev/api/me')).toBe('https://example.test');
+  });
+});

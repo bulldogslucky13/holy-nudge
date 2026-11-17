@@ -3,7 +3,7 @@ import { buildMe, isAdminFor } from '../../src/api/me';
 import { createDataSource } from '../../src/chms/index';
 import { loadConfig } from '../../src/core/config';
 import { createD1Store } from '../../src/db';
-import type { Env } from '../../src/env';
+import { appBaseUrl, type Env } from '../../src/env';
 import { loadSnapshot, peopleSeen, type Snapshot } from '../../src/job/load';
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
@@ -27,6 +27,6 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     await store.upsertLeaders(peopleSeen(snapshot));
     leaders = await store.listLeaders();
   }
-  const baseUrl = env.APP_BASE_URL || new URL(request.url).origin;
+  const baseUrl = appBaseUrl(env, request.url);
   return json(buildMe({ config, snapshot, leader, leaders, now, baseUrl }));
 };
