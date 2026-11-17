@@ -46,3 +46,80 @@ export function addDays(date: string, days: number): string {
   const [y, m, d] = date.split('-').map(Number) as [number, number, number];
   return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
+
+/** Offset (ms) of `timeZone` from UTC at an instant: local wall time minus UTC. */
+const wallFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function zoneOffsetMs(instant: number, timeZone: string): number {
+  let f = wallFormatters.get(timeZone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    wallFormatters.set(timeZone, f);
+  }
+  const parts = f.formatToParts(new Date(instant));
+  const n = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const wall = Date.UTC(n('year'), n('month') - 1, n('day'), n('hour') % 24, n('minute'), n('second'));
+  return wall - (instant - (instant % 1000 + 1000) % 1000);
+}
+
+/** The instant (epoch ms) at which a local wall-clock time occurs in `timeZone`. */
+export function zonedWallTimeToInstant(
+  y: number,
+  mo: number,
+  d: number,
+  h: number,
+  mi: number,
+  s: number,
+  ms: number,
+  timeZone: string,
+): number {
+  const wall = Date.UTC(y, mo - 1, d, h, mi, s, ms);
+  // Two passes settle the offset on either side of a DST change.
+  let instant = wall - zoneOffsetMs(wall, timeZone);
+  instant = wall - zoneOffsetMs(instant, timeZone);
+  return instant;
+}
+
+const LOCAL_DATETIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3})\d*)?)?$/;
+
+/**
+ * The instant a ChMS `created` value stands for, for elapsed-time rules (24 h unassigned).
+ * - Date-only ("2026-09-15", which the Pushpay guide shows) is taken as the END of that
+ *   calendar day in `timeZone` (the next local midnight), so it can never look older than it is.
+ * - Datetimes with an offset (or Z) are exact.
+ * - Datetimes with no offset are local wall time in `timeZone` (as for due values).
+ */
+export function createdToInstant(created: string, timeZone: string): number {
+  const s = created.trim();
+  if (DATE_ONLY.test(s)) {
+    const next = addDays(s, 1);
+    const [y, m, d] = next.split('-').map(Number) as [number, number, number];
+    return zonedWallTimeToInstant(y, m, d, 0, 0, 0, 0, timeZone);
+  }
+  const local = LOCAL_DATETIME.exec(s);
+  if (local) {
+    const [, y, mo, d, h, mi, sec, frac] = local;
+    return zonedWallTimeToInstant(
+      Number(y),
+      Number(mo),
+      Number(d),
+      Number(h),
+      Number(mi),
+      Number(sec ?? 0),
+      Number((frac ?? '0').padEnd(3, '0')),
+      timeZone,
+    );
+  }
+  const t = Date.parse(s);
+  if (Number.isNaN(t)) throw new RangeError(`Invalid created value: ${created}`);
+  return t;
+}

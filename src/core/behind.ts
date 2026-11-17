@@ -1,6 +1,6 @@
 // The heart of Holy Nudge: who is behind, who is stale-unassigned, and who gets told.
 // Pure functions. `now` is always passed in.
-import { HOUR_MS, dueToDate, zonedDate } from './time';
+import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from './time';
 import type { HolyNudgeConfig, Person, Queue, QueueEntry } from './types';
 
 /** NOT_STARTED, or (not DONE and the due calendar date is before today's date in `tz`). */
@@ -11,12 +11,13 @@ export function isBehind(entry: QueueEntry, now: Date, tz: string): boolean {
   return dueToDate(entry.due, tz) < zonedDate(now, tz);
 }
 
-/** Unassigned, not DONE, and created more than 24 elapsed hours before `now`. */
-export function isStaleUnassigned(entry: QueueEntry, now: Date): boolean {
+/**
+ * Unassigned, not DONE, and created more than 24 elapsed hours before `now`.
+ * A date-only `created` counts from the end of that calendar day in `tz`, so it never flags early.
+ */
+export function isStaleUnassigned(entry: QueueEntry, now: Date, tz: string): boolean {
   if (entry.assignee !== null || entry.status === 'DONE') return false;
-  const created = Date.parse(entry.created);
-  if (Number.isNaN(created)) throw new RangeError(`Invalid created value: ${entry.created}`);
-  return now.getTime() - created > 24 * HOUR_MS;
+  return now.getTime() - createdToInstant(entry.created, tz) > 24 * HOUR_MS;
 }
 
 /** Drop queues whose id or exact name is listed in config.excludedQueues. */
@@ -121,7 +122,7 @@ export function computeNudges(
         adminId,
         name: adminNames.get(adminId) ?? null,
         queueIds: [...qset],
-        staleUnassigned: active.filter((e) => inScope(e) && isStaleUnassigned(e, now)),
+        staleUnassigned: active.filter((e) => inScope(e) && isStaleUnassigned(e, now, tz)),
         behindByLeader,
       };
     });
