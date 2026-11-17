@@ -638,7 +638,7 @@ function explain(status: number): string {
  * which refreshes under the lock when needed.
  */
 export function createPushpayDataSource(
-  env: OAuthEnv,
+  env: Pick<OAuthEnv, 'DB' | 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'CHMS_API_HOST'>,
   options: Omit<Partial<PushpayOptions>, 'apiHost' | 'accessToken'> = {},
 ): PushpayDataSource {
   return new PushpayDataSource({

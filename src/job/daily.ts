@@ -1,9 +1,12 @@
 // The daily job: load -> compute behind -> push leaders and admins -> record the run.
+import { ChmsNotConfiguredError } from '../chms/oauth';
+import { IncompleteDataError } from '../chms/pushpay';
+import { ReauthorizationRequired, TokenPersistError } from '../chms/tokens';
 import { computeNudges } from '../core/behind';
 import type { DataSource, HolyNudgeConfig } from '../core/types';
 import type { JobRunSummary, LeaderRow, Store } from '../db';
 import { addCounts, deliverToLeader, emptyCounts, type DeliveryCounts } from '../push/deliver';
-import { adminPayload, alertPayload, leaderPayload } from '../push/payload';
+import { adminPayload, alertPayload, leaderPayload, type AlertReason } from '../push/payload';
 import type { PushSender } from '../push/sender';
 import { adminCounts, globalAdminView, loadSnapshot, peopleSeen, type Snapshot } from './load';
 
@@ -101,14 +104,25 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
   } catch (err) {
     // Counts and error class only: messages could echo API data.
     const errorName = err instanceof Error ? err.name : 'unknown';
-    await store.finishJobRun(runId, false, { stage, error: errorName }, new Date()).catch(() => undefined);
-    await alertOwners(store, sender, stage, now).catch(() => undefined);
+    const reason = alertReason(stage, err);
+    await store.finishJobRun(runId, false, { stage, reason, error: errorName }, new Date()).catch(() => undefined);
+    await alertOwners(store, sender, reason, now).catch(() => undefined);
     throw new JobFailedError(stage, err);
   }
 }
 
-async function alertOwners(store: Store, sender: PushSender, stage: 'datasource' | 'job', now: Date): Promise<void> {
+/** Map a failure to the owner alert it deserves. Re-approval gets its own message. */
+export function alertReason(stage: 'datasource' | 'job', err: unknown): AlertReason {
+  // A lost connection needs the same fix wherever it surfaces.
+  if (err instanceof ReauthorizationRequired || err instanceof TokenPersistError) return 'reauth';
+  if (stage === 'job') return 'job';
+  if (err instanceof ChmsNotConfiguredError) return 'not_configured';
+  if (err instanceof IncompleteDataError) return 'incomplete';
+  return 'datasource'; // ChmsApiError, ChmsDataError, TokenRefreshError, EmptyProcessError, anything else
+}
+
+async function alertOwners(store: Store, sender: PushSender, reason: AlertReason, now: Date): Promise<void> {
   for (const row of await store.listLeaders()) {
-    if (row.isOwner) await deliverToLeader(store, sender, row.id, alertPayload(stage), now);
+    if (row.isOwner) await deliverToLeader(store, sender, row.id, alertPayload(reason), now);
   }
 }

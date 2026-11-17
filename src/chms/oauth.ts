@@ -21,6 +21,28 @@ export interface OAuthEnv {
   CHMS_SUBDOMAIN?: string;
 }
 
+/** What the host actually provides: the credentials may not be set yet (fixture mode). */
+export type OAuthEnvInput = Omit<OAuthEnv, 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'OAUTH_SETUP_KEY'> &
+  Partial<Pick<OAuthEnv, 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'OAUTH_SETUP_KEY'>>;
+
+type CredentialName = 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'OAUTH_SETUP_KEY';
+
+/** Names (never values) of the given settings that are missing or empty. */
+export function missingSettings(env: Partial<Record<CredentialName, string>>, names: readonly CredentialName[]): CredentialName[] {
+  return names.filter((n) => !env[n]);
+}
+
+/** A ChMS credential the current operation needs is not set. The message names settings, never values. */
+export class ChmsNotConfiguredError extends Error {
+  override name = 'ChmsNotConfiguredError';
+  constructor(readonly missing: string[]) {
+    super(
+      `Pushpay ChMS credentials are not configured yet: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set. ` +
+        'Set them with `wrangler pages secret put` / `wrangler secret put` (see README), or keep "dataSource": "fixture".',
+    );
+  }
+}
+
 /** Registered with Pushpay character for character. A constant: never derived from the request host. */
 export const REDIRECT_URI = 'https://holynudge.cameronbristol.xyz/oauth/callback';
 

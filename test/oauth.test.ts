@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { onRequestGet as start } from '../functions/oauth/start';
 import { onRequestGet as callback } from '../functions/oauth/callback';
-import { constantTimeEqual, REDIRECT_URI, SCOPES, STATE_TTL_MS, type OAuthEnv } from '../src/chms/oauth';
+import { constantTimeEqual, REDIRECT_URI, SCOPES, STATE_TTL_MS, type OAuthEnvInput } from '../src/chms/oauth';
 import { createTestD1, type TestD1 } from './sqlite-d1';
 
 let t: TestD1;
-let env: OAuthEnv;
+let env: OAuthEnvInput;
 let tokenCalls: { url: string; body: URLSearchParams; headers: Headers }[];
 let tokenReply: () => Response;
 
@@ -77,6 +77,23 @@ describe('/oauth/start', () => {
     expect(states().map((s) => s.state)).toEqual([q.get('state')]);
   });
 
+  it('shows a plain "not configured yet" page while credentials are missing, with or without a key', async () => {
+    for (const missing of ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET', 'OAUTH_SETUP_KEY'] as const) {
+      const saved = env[missing];
+      delete env[missing];
+      for (const q of ['', '?key=setup-key-0123456789']) {
+        const res = await call(start, `${HOST}/oauth/start${q}`);
+        expect(res.status).toBe(503);
+        const text = await res.text();
+        expect(text).toContain('credentials are not configured yet');
+        expect(text).not.toContain('client-');
+        expect(text).not.toContain('setup-key');
+      }
+      env[missing] = saved;
+    }
+    expect(states()).toHaveLength(0);
+  });
+
   it('uses the sandbox auth host when configured', async () => {
     env.CHMS_AUTH_HOST = 'https://beta-oauth.ccbchurch.com';
     const res = await call(start, `${HOST}/oauth/start?key=setup-key-0123456789`);
@@ -89,6 +106,21 @@ describe('/oauth/callback', () => {
     const res = await call(callback, `${HOST}/oauth/callback`);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Holy Nudge OAuth callback is ready');
+    expect(tokenCalls).toHaveLength(0);
+  });
+
+  it('still shows the ready page with no parameters before credentials exist', async () => {
+    env = { DB: t.db };
+    const res = await call(callback, `${HOST}/oauth/callback`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Holy Nudge OAuth callback is ready');
+  });
+
+  it('refuses a callback with parameters while credentials are missing, without calling Pushpay', async () => {
+    env = { DB: t.db, OAUTH_SETUP_KEY: 'setup-key-0123456789' };
+    const res = await call(callback, `${HOST}/oauth/callback?code=abc&state=xyz`);
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('not configured yet');
     expect(tokenCalls).toHaveLength(0);
   });
 

@@ -2,18 +2,25 @@
 // https://holynudge.cameronbristol.xyz/oauth/callback
 // Validates and consumes the CSRF state, exchanges the one-time code, stores the tokens.
 // Pages never show error details; logs carry error codes only (no codes, tokens or secrets).
-import { consumeState, exchangeCode, htmlPage, OAuthTokenError, type OAuthEnv } from '../../src/chms/oauth';
+import { consumeState, exchangeCode, htmlPage, missingSettings, OAuthTokenError, type OAuthEnvInput } from '../../src/chms/oauth';
 import { saveAuthorizedTokens } from '../../src/chms/tokens';
 
 const FAILED = 'Holy Nudge could not connect';
 const RETRY_HINT = 'Nothing was changed. Ask the Holy Nudge owner for a fresh setup link and try again.';
 
-export const onRequestGet: PagesFunction<OAuthEnv> = async ({ request, env }) => {
+export const onRequestGet: PagesFunction<OAuthEnvInput> = async ({ request, env }) => {
   const params = new URL(request.url).searchParams;
   if ([...params.keys()].length === 0) {
     // Lets anyone confirm the route is live before credentials exist.
     return htmlPage(200, 'Holy Nudge OAuth callback is ready', 'Holy Nudge OAuth callback is ready.');
   }
+
+  const missing = missingSettings(env, ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET']);
+  if (missing.length > 0 || !env.CHMS_CLIENT_ID || !env.CHMS_CLIENT_SECRET) {
+    console.warn(`oauth callback: not configured (${missing.join(', ')} missing)`);
+    return htmlPage(503, 'Not set up yet', 'Holy Nudge\'s Pushpay credentials are not configured yet. Nothing was changed.');
+  }
+  const creds = { CHMS_CLIENT_ID: env.CHMS_CLIENT_ID, CHMS_CLIENT_SECRET: env.CHMS_CLIENT_SECRET, CHMS_API_HOST: env.CHMS_API_HOST };
 
   const state = params.get('state') ?? '';
   const code = params.get('code') ?? '';
@@ -34,7 +41,7 @@ export const onRequestGet: PagesFunction<OAuthEnv> = async ({ request, env }) =>
 
   let tokens;
   try {
-    tokens = await exchangeCode(env, code);
+    tokens = await exchangeCode(creds, code);
   } catch (e) {
     const detail = e instanceof OAuthTokenError ? `${e.code}, HTTP ${e.status || 'n/a'}` : 'unexpected error';
     console.error(`oauth callback: code exchange failed (${detail})`);

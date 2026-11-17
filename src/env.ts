@@ -14,9 +14,19 @@ export interface Env {
   JOB_TRIGGER_KEY?: string;
   /** Optional override for building personal links (defaults to the request origin / production URL). */
   APP_BASE_URL?: string;
-  /** Used by the live ChMS connection (OAuth worker). */
+  /**
+   * Live ChMS connection (dataSource "pushpay"). Optional so fixture mode runs without them;
+   * checked at runtime where needed (src/chms/index.ts, functions/oauth/*). Secrets.
+   */
   CHMS_CLIENT_ID?: string;
   CHMS_CLIENT_SECRET?: string;
+  /** Secret. /oauth/start?key=<this> begins the Master Admin approval (Pages only). */
+  OAUTH_SETUP_KEY?: string;
+  /** Vars. Default production hosts; sandbox https://beta-oauth.ccbchurch.com / https://api-beta.ccbchurch.com */
+  CHMS_AUTH_HOST?: string;
+  CHMS_API_HOST?: string;
+  /** Var, optional. Church subdomain for the authorize page. */
+  CHMS_SUBDOMAIN?: string;
 }
 
 export const DEFAULT_APP_BASE_URL = 'https://holynudge.cameronbristol.xyz';

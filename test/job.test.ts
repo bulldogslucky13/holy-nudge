@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { OAuthTokenError } from '../src/chms/oauth';
+import { ChmsApiError, IncompleteDataError } from '../src/chms/pushpay';
+import { ReauthorizationRequired, TokenPersistError, TokenRefreshError } from '../src/chms/tokens';
+import { alertPayload } from '../src/push/payload';
+import { createTestD1 } from './sqlite-d1';
 import { createDataSource } from '../src/chms/index';
 import type { DataSource, QueueEntry } from '../src/core/types';
-import { JobFailedError, localHour, runDailyJob } from '../src/job/daily';
+import { JobFailedError, alertReason, localHour, runDailyJob } from '../src/job/daily';
 import { FakeSender, FakeStore } from './fakes';
 import { config, entry, person, queue } from './helpers';
 
@@ -122,7 +127,7 @@ describe('daily job', () => {
       const { store, sender, ids } = setup();
       const ds = source({ listEntries: async () => { throw new Error('HTTP 500 from ChMS'); } });
       await expect(runDailyJob({ config: cfg, store, sender, dataSource: () => ds, now: NOW })).rejects.toBeInstanceOf(JobFailedError);
-      expect(store.runs[0]).toMatchObject({ ok: false, summary: { stage: 'datasource', error: 'Error' } });
+      expect(store.runs[0]).toMatchObject({ ok: false, summary: { stage: 'datasource', reason: 'datasource', error: 'Error' } });
       expect(sender.sent).toEqual([
         { endpoint: `https://push.example/${ids.owner}/0`, payload: { title: 'Holy Nudge', body: 'Holy Nudge could not read ChMS this morning', kind: 'alert', count: 0 } },
       ]);
@@ -134,13 +139,70 @@ describe('daily job', () => {
       ).rejects.toThrow(/datasource/);
       expect(sender.sent.map((s) => s.payload.kind)).toEqual(['alert']);
     });
-    it('treats the not-yet-connected pushpay source as a data-source failure', async () => {
+    it('treats pushpay without credentials as a data-source failure with its own alert', async () => {
       const { store, sender } = setup();
       const pp = config({ dataSource: 'pushpay' });
       await expect(
         runDailyJob({ config: pp, store, sender, dataSource: () => createDataSource(pp, {} as never, NOW), now: NOW }),
-      ).rejects.toThrow(/not connected yet/);
-      expect(store.runs[0]!.summary).toEqual({ stage: 'datasource', error: 'DataSourceNotConnectedError' });
+      ).rejects.toThrow(/credentials are not configured yet/);
+      expect(store.runs[0]!.summary).toEqual({ stage: 'datasource', reason: 'not_configured', error: 'ChmsNotConfiguredError' });
+      expect(sender.sent.map((s) => s.payload.body)).toEqual(['Holy Nudge has no Pushpay credentials yet, so no nudges went out']);
+    });
+
+    it('sends the re-approval alert when pushpay has never been approved (no refresh token in D1)', async () => {
+      const { store, sender, ids } = setup();
+      const t = await createTestD1('migrations/0002_oauth.sql');
+      const pp = config({ dataSource: 'pushpay' });
+      const env = { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's' };
+      const calls: string[] = [];
+      vi.stubGlobal('fetch', async (u: RequestInfo | URL) => {
+        calls.push(String(u));
+        return new Response('{}', { status: 500 });
+      });
+      try {
+        await expect(
+          runDailyJob({ config: pp, store, sender, dataSource: () => createDataSource(pp, env as never, NOW), now: NOW }),
+        ).rejects.toBeInstanceOf(JobFailedError);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(calls).toEqual([]); // no API or token call without a stored refresh token
+      expect(store.runs[0]).toMatchObject({ ok: false, summary: { stage: 'datasource', reason: 'reauth', error: 'ReauthorizationRequired' } });
+      expect(sender.sent).toEqual([
+        {
+          endpoint: `https://push.example/${ids.owner}/0`,
+          payload: { title: 'Holy Nudge', body: 'Holy Nudge lost its Pushpay connection. A Master Admin needs to approve it again.', kind: 'alert', count: 0 },
+        },
+      ]);
+    });
+
+    const cases: [string, unknown, string][] = [
+      ['ReauthorizationRequired (invalid_grant)', new ReauthorizationRequired('invalid_grant'), 'reauth'],
+      ['TokenPersistError', new TokenPersistError('x'), 'reauth'],
+      ['IncompleteDataError', new IncompleteDataError('q1', ['not_started: expected 3, got 2']), 'incomplete'],
+      ['ChmsApiError', new ChmsApiError(410, '/queues', 'gone'), 'datasource'],
+      ['TokenRefreshError', new TokenRefreshError(new OAuthTokenError(503, 'http_error')), 'datasource'],
+      ['a plain Error', new Error('boom'), 'datasource'],
+    ];
+    for (const [label, err, reason] of cases) {
+      it(`maps ${label} to the "${reason}" owner alert and records a failed run`, async () => {
+        const { store, sender, ids } = setup();
+        const ds = source({ listQueues: async () => { throw err; } });
+        await expect(runDailyJob({ config: cfg, store, sender, dataSource: () => ds, now: NOW })).rejects.toBeInstanceOf(JobFailedError);
+        expect(store.runs[0]).toMatchObject({ ok: false, summary: { stage: 'datasource', reason } });
+        expect(sender.sent).toHaveLength(1);
+        expect(sender.sent[0]!.endpoint).toBe(`https://push.example/${ids.owner}/0`);
+        expect(sender.sent[0]!.payload).toEqual(alertPayload(reason as Parameters<typeof alertPayload>[0]));
+      });
+    }
+
+    it('alert bodies are distinct, plain, and carry no data', () => {
+      const reasons = ['reauth', 'not_configured', 'incomplete', 'datasource', 'job'] as const;
+      const bodies = reasons.map((r) => alertPayload(r).body);
+      expect(new Set(bodies).size).toBe(reasons.length);
+      for (const r of reasons) expect(alertPayload(r)).toMatchObject({ kind: 'alert', count: 0 });
+      expect(alertReason('job', new ReauthorizationRequired('invalid_grant'))).toBe('reauth');
+      expect(alertReason('job', new Error('x'))).toBe('job');
     });
   });
 

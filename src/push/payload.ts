@@ -28,8 +28,24 @@ export function testPayload(): PushPayload {
   return { title: 'Holy Nudge', body: "Notifications are on. You're all set!", kind: 'test', count: 0 };
 }
 
-export function alertPayload(stage: 'datasource' | 'job'): PushPayload {
-  const body =
-    stage === 'datasource' ? 'Holy Nudge could not read ChMS this morning' : 'Holy Nudge hit a problem running this morning';
-  return { title: 'Holy Nudge', body, kind: 'alert', count: 0 };
+/**
+ * Why the owner is being alerted. Each has its own plain message (no data, no error text).
+ * - reauth: the Pushpay connection is gone (refresh token rejected or never stored); a Master Admin must approve again.
+ * - not_configured: dataSource is "pushpay" but the client id/secret are not set.
+ * - incomplete: ChMS returned fewer people than its own counts say (possibly partial visibility).
+ * - datasource: any other failure reading ChMS (API errors, Workflows migration, timeouts).
+ * - job: something after the data was read (database, push sending).
+ */
+export type AlertReason = 'reauth' | 'not_configured' | 'incomplete' | 'datasource' | 'job';
+
+const ALERT_BODIES: Record<AlertReason, string> = {
+  reauth: 'Holy Nudge lost its Pushpay connection. A Master Admin needs to approve it again.',
+  not_configured: 'Holy Nudge has no Pushpay credentials yet, so no nudges went out',
+  incomplete: 'Holy Nudge only got part of the ChMS data this morning, so no nudges went out',
+  datasource: 'Holy Nudge could not read ChMS this morning',
+  job: 'Holy Nudge hit a problem running this morning',
+};
+
+export function alertPayload(reason: AlertReason): PushPayload {
+  return { title: 'Holy Nudge', body: ALERT_BODIES[reason], kind: 'alert', count: 0 };
 }

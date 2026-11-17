@@ -442,7 +442,7 @@ describe('createPushpayDataSource', () => {
       .prepare("UPDATE oauth_tokens SET refresh_token = 'r', access_token = 'access-from-d1', access_expires_at = ?")
       .run(Date.now() + 3600_000);
     const ds = createPushpayDataSource(
-      { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', OAUTH_SETUP_KEY: 'k', CHMS_API_HOST: 'https://api-beta.ccbchurch.com/' },
+      { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', CHMS_API_HOST: 'https://api-beta.ccbchurch.com/' },
       { fetch: fakeFetch, sleep: async () => {}, log: () => {} },
     );
     await ds.listQueues('37');
