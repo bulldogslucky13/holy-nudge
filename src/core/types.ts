@@ -48,4 +48,9 @@ export interface HolyNudgeConfig {
   dataSource: DataSourceKind;
   /** Base URL for deep links into ChMS. */
   chmsBaseUrl: string;
+  /**
+   * Link to a queue in the ChMS web UI. Placeholders: {chmsBaseUrl}, {queueId}.
+   * Optional; see DEFAULT_QUEUE_URL_TEMPLATE. UNVERIFIED: the real URL pattern is not documented.
+   */
+  queueUrlTemplate?: string;
 }

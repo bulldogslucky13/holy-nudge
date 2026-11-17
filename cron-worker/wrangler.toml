@@ -1,0 +1,21 @@
+# holy-nudge-cron: the daily job. Deploy with `npm run deploy:cron`.
+# Secrets (wrangler secret put <NAME> -c cron-worker/wrangler.toml):
+#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional), JOB_TRIGGER_KEY
+name = "holy-nudge-cron"
+main = "index.ts"
+compatibility_date = "2026-11-17"
+workers_dev = true
+
+# 13:00 and 14:00 UTC; the job itself runs only when it is morningHour in America/Chicago (DST-safe).
+[triggers]
+crons = ["0 13 * * *", "0 14 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "holy-nudge"
+# PLACEHOLDER: replace with the id printed by `npx wrangler d1 create holy-nudge` (same id as ../wrangler.toml).
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../migrations"
+
+[observability]
+enabled = true

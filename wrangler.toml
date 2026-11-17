@@ -1,0 +1,14 @@
+# Cloudflare Pages project "holy-nudge": static PWA from public/ + Pages Functions in functions/.
+# Secrets (npx wrangler pages secret put <NAME> --project-name holy-nudge):
+#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional)
+name = "holy-nudge"
+pages_build_output_dir = "public"
+compatibility_date = "2026-11-17"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "holy-nudge"
+# PLACEHOLDER: replace with the id printed by `npx wrangler d1 create holy-nudge`.
+# Local dev (`npm run dev`, `npm run db:migrate:local`) works with the placeholder.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

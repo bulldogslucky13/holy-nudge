@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, parseConfig } from '../src/core/config';
+import { ConfigError, loadConfig, parseConfig, queueUrl } from '../src/core/config';
 
 describe('config', () => {
   it('bundled config loads with the spec defaults', () => {
@@ -19,5 +19,12 @@ describe('config', () => {
     expect(() => parseConfig({ ...ok, dataSource: 'csv' })).toThrow(/dataSource/);
     expect(() => parseConfig({ ...ok, adminsByQueue: { Staff: 'M1' } })).toThrow(/adminsByQueue/);
     expect(() => parseConfig({ ...ok, excludedQueues: [1] })).toThrow(/excludedQueues/);
+  });
+  it('builds queue URLs from the default or a configured template', () => {
+    const ok = loadConfig();
+    expect(queueUrl(ok, '5')).toBe('https://wildwood.ccbchurch.com/process_queue_list.php?queue_id=5');
+    const custom = parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q/{queueId}' });
+    expect(queueUrl(custom, 'a b')).toBe('https://wildwood.ccbchurch.com/q/a%20b');
+    expect(() => parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q' })).toThrow(/queueUrlTemplate/);
   });
 });

@@ -1,0 +1,13 @@
+# Copy to .dev.vars (gitignored) for `npm run dev`. Names only; never commit values.
+# Generate the VAPID pair with `npm run gen-vapid`.
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+# Optional: mailto: or https: contact sent to push services (defaults to the app URL).
+VAPID_SUBJECT=
+# Cron worker only: shared secret for POST /run?force=1 (header X-Job-Trigger-Key).
+JOB_TRIGGER_KEY=
+# Optional: base URL for personal links (defaults to the request origin).
+APP_BASE_URL=
+# Live ChMS connection (OAuth).
+CHMS_CLIENT_ID=
+CHMS_CLIENT_SECRET=

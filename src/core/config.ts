@@ -3,6 +3,16 @@ import type { DataSourceKind, HolyNudgeConfig } from './types';
 
 export class ConfigError extends Error {}
 
+/** UNVERIFIED guess at the ChMS web UI queue page; override with queueUrlTemplate in config. */
+export const DEFAULT_QUEUE_URL_TEMPLATE = '{chmsBaseUrl}/process_queue_list.php?queue_id={queueId}';
+
+/** Deep link to a queue in the ChMS web UI, from config.queueUrlTemplate (or the default). */
+export function queueUrl(config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'queueUrlTemplate'>, queueId: string): string {
+  return (config.queueUrlTemplate ?? DEFAULT_QUEUE_URL_TEMPLATE)
+    .replaceAll('{chmsBaseUrl}', config.chmsBaseUrl)
+    .replaceAll('{queueId}', encodeURIComponent(queueId));
+}
+
 function fail(msg: string): never {
   throw new ConfigError(`holy-nudge.config.json: ${msg}`);
 }
@@ -48,6 +58,14 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     fail('chmsBaseUrl must be an absolute URL');
   }
 
+  let queueUrlTemplate: string | undefined;
+  if (o.queueUrlTemplate !== undefined) {
+    if (typeof o.queueUrlTemplate !== 'string' || !o.queueUrlTemplate.includes('{queueId}')) {
+      fail('queueUrlTemplate must be a string containing {queueId}');
+    }
+    queueUrlTemplate = o.queueUrlTemplate;
+  }
+
   return {
     processId: o.processId,
     excludedQueues: o.excludedQueues,
@@ -56,6 +74,7 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     morningHour: hour,
     dataSource: o.dataSource as DataSourceKind,
     chmsBaseUrl: o.chmsBaseUrl.replace(/\/+$/, ''),
+    ...(queueUrlTemplate !== undefined ? { queueUrlTemplate } : {}),
   };
 }
 
