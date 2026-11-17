@@ -98,3 +98,57 @@ Student data is never stored in D1; views fetch it live through the DataSource (
 ## Daily job
 
 Cron fires at 13:00 and 14:00 UTC; job proceeds only when the Central local hour equals `morningHour` (handles DST). One push per leader with behind count; one summary push per admin. On data-source error: record failed run and push an alert to admins flagged as owner.
+
+## Addendum: API contract and ownership (build phase 2)
+
+### Personal link and iOS storage
+
+iOS gives a Home Screen web app its own storage, separate from Safari, so a token saved in Safari's `localStorage` is lost on install. Therefore:
+
+- The personal link is `https://holynudge.cameronbristol.xyz/l/<token>`.
+- `functions/l/[token].ts` serves `public/index.html` with the manifest link rewritten (HTMLRewriter) to `/manifest.webmanifest?t=<token>`.
+- `functions/manifest.webmanifest.ts` returns the manifest with `start_url` and `scope`-compatible `id` set to `/l/<token>` when `t` is present, so the installed app opens straight into the leader's view.
+- The client reads the token from the path (`/l/<token>`), falls back to `localStorage`, and sends it as `Authorization: Bearer <token>` on every API call. Notification clicks open `/l/<token>` (the service worker gets the token from the client via `postMessage` and stores it in IndexedDB or Cache; payloads never contain it).
+- `/` without a token shows a friendly "open your personal link" page.
+
+### JSON contract
+
+All API errors: `{ "error": "<code>" }` with 4xx/5xx. Invalid or missing token: 401 `invalid_token`.
+
+`GET /api/me` ->
+```json
+{
+  "leader": { "name": "Sam Fakename", "isAdmin": false, "notificationsOn": true },
+  "behind": [ {
+    "entryId": "e1", "queueId": "q3", "queueName": "Outreach Team",
+    "queueUrl": "https://.../", "status": "NOT_STARTED",
+    "due": "2026-11-10", "daysOverdue": 7,
+    "individual": { "name": "Pat Example", "phone": "405-555-0101", "email": "pat@example.com" }
+  } ],
+  "admin": {
+    "staleUnassigned": [ { "...item fields": "", "hoursWaiting": 60 } ],
+    "byLeader": [ { "leader": { "name": "Sam Fakename" }, "notificationsOn": false, "items": [ ] } ],
+    "leadersWithoutNotifications": [ { "name": "Sam Fakename" } ],
+    "leaderLinks": [ { "name": "Sam Fakename", "url": "https://holynudge.cameronbristol.xyz/l/..." } ]
+  },
+  "generatedAt": "2026-11-17T14:00:00Z"
+}
+```
+`admin` is present only for admins. `byLeader` entries with `leader: null` are behind-but-unassigned. `daysOverdue` is null when not overdue (for example Not Started with a future due date). `due` is normalised to a `YYYY-MM-DD` Central date or null.
+
+- `GET /api/vapid-public-key` -> `{ "key": "<base64url>" }`
+- `POST /api/subscribe` body `{ "subscription": <PushSubscription.toJSON()> }` -> `{ "ok": true }`
+- `POST /api/unsubscribe` body `{ "endpoint": "..." }` -> `{ "ok": true }`
+- `POST /api/test-push` -> `{ "ok": true, "sent": 1 }`
+
+Push payload (JSON, counts only): `{ "title": "Holy Nudge", "body": "3 students are waiting on you", "kind": "leader" | "admin" | "test" | "alert", "count": 3 }`.
+
+### `leaders` table additions
+
+`is_owner` flag (gets failure alerts; Cameron). The daily job upserts a leader row (with a fresh token) for every assignee and queue manager it sees, so links exist before anyone asks.
+
+### File ownership in phase 2
+
+- Backend worker: `src/push/`, `src/job/`, `src/db/`, `src/env.ts`, `src/chms/index.ts` (data-source factory), `functions/` except `functions/oauth/`, `cron-worker/`, `migrations/0001_*.sql`, wrangler config, `scripts/`.
+- Frontend worker: `public/` only.
+- OAuth worker: `src/chms/pushpay.ts`, `src/chms/tokens.ts`, `src/chms/oauth.ts`, `functions/oauth/`, `migrations/0002_oauth.sql`, their tests.
