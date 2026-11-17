@@ -8,7 +8,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "dev": "wrangler pages dev",
-    "dev:cron": "wrangler dev -c cron-worker/wrangler.toml --test-scheduled --persist-to .wrangler/state",
+    "dev:cron": "wrangler dev -c cron-worker/wrangler.toml --env-file \"$PWD/.dev.vars\" --test-scheduled --persist-to .wrangler/state --port 8787",
     "db:migrate:local": "wrangler d1 migrations apply holy-nudge --local",
     "db:migrate:remote": "wrangler d1 migrations apply holy-nudge --remote",
     "deploy": "wrangler pages deploy",
