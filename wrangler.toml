@@ -10,5 +10,5 @@ binding = "DB"
 database_name = "holy-nudge"
 # PLACEHOLDER: replace with the id printed by `npx wrangler d1 create holy-nudge`.
 # Local dev (`npm run dev`, `npm run db:migrate:local`) works with the placeholder.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "81a8960b-2e43-4df3-ad54-a0d19167efca"
 migrations_dir = "migrations"
