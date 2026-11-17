@@ -25,7 +25,7 @@ export class FakeStore implements Store {
   async upsertLeaders(people: { id: string; name: string }[]) {
     for (const p of people) {
       const row = this.leaders.find((l) => l.chmsIndividualId === p.id);
-      if (row) row.name = p.name;
+      if (row) { if (!row.isAdmin && !row.isOwner) row.name = p.name; }
       else this.addLeader({ chmsIndividualId: p.id, name: p.name });
     }
   }

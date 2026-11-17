@@ -69,6 +69,12 @@ export async function createTestD1(...migrationPaths: string[]): Promise<TestD1>
 
   state.db = {
     prepare: (sql: string) => new Stmt(sql),
+    // Not transactional like real D1; sequential is enough for the store tests.
+    batch: async (stmts: Stmt[]) => {
+      const out = [];
+      for (const st of stmts) out.push(await st.run());
+      return out;
+    },
     exec: async (sql: string) => {
       sqlite.exec(sql);
       return { count: 1, duration: 0 };

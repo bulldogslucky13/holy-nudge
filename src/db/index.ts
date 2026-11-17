@@ -31,7 +31,10 @@ export interface JobRunSummary {
 }
 
 export interface Store {
-  /** Insert a leader (with a fresh token) for each ChMS person not yet known; refresh names of known ones. */
+  /**
+   * Insert a leader (with a fresh token) for each ChMS person not yet known; refresh names of known
+   * ones, except admins/owners, who keep the name given to scripts/add-leader.
+   */
   upsertLeaders(people: { id: string; name: string }[]): Promise<void>;
   listLeaders(): Promise<LeaderRow[]>;
   leaderByToken(token: string): Promise<LeaderRow | null>;
@@ -83,7 +86,8 @@ export function createD1Store(db: D1Database): Store {
       if (unique.size === 0) return;
       const stmt = db.prepare(
         `INSERT INTO leaders (chms_individual_id, name, token) VALUES (?1, ?2, ?3)
-         ON CONFLICT(chms_individual_id) DO UPDATE SET name = excluded.name WHERE leaders.name <> excluded.name`,
+         ON CONFLICT(chms_individual_id) DO UPDATE SET name = excluded.name
+           WHERE leaders.name <> excluded.name AND leaders.is_admin = 0 AND leaders.is_owner = 0`,
       );
       await db.batch([...unique].map(([id, name]) => stmt.bind(id, name, generateToken())));
     },
