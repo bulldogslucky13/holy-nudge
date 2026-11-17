@@ -451,7 +451,7 @@
   /* ---------------------------------------------------------------- simple message screens */
 
   function markImg() {
-    return h('img', { class: 'mark', src: '/icon-192.png', alt: '', width: '72', height: '72' });
+    return h('img', { class: 'logo', src: '/logo.svg', alt: 'Holy Nudge', width: '200', height: '48' });
   }
 
   function loadingScreen() {
@@ -835,7 +835,7 @@
       h(
         'div',
         { class: 'top' },
-        h('div', { class: 'brand' }, h('img', { src: '/icon-192.png', alt: '', width: '32', height: '32' }), 'Holy Nudge'),
+        h('div', { class: 'brand' }, h('img', { src: '/logo.svg', alt: 'Holy Nudge', width: '150', height: '36' })),
         h('button', { class: 'btn small-btn', type: 'button', onclick: function () { load(true); } }, 'Refresh')
       )
     );

@@ -122,6 +122,8 @@ a { color: var(--accent); }
 .screen { padding: 8px 0 24px; display: grid; gap: 18px; }
 .screen.center { text-align: center; justify-items: center; padding-top: 18vh; }
 
+.logo { display: block; height: 48px; width: auto; max-width: 100%; }
+
 .mark {
   width: 72px;
   height: 72px;
@@ -187,7 +189,7 @@ a { color: var(--accent); }
   margin-bottom: 4px;
 }
 .top .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
-.top .brand img { width: 32px; height: 32px; border-radius: 9px; }
+.top .brand img { display: block; height: 36px; width: auto; }
 
 .hello { margin: 14px 0 18px; display: grid; gap: 4px; }
 
