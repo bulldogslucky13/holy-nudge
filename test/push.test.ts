@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { base64urlDecode, base64urlEncode } from '../src/push/base64url';
 import { encryptPushPayload, p256PointToJwk } from '../src/push/encrypt';
-import { adminPayload, alertPayload, leaderPayload } from '../src/push/payload';
+import { adminPayload, alertPayload, leaderPayload, testPayload } from '../src/push/payload';
 import { createWebPushSender } from '../src/push/sender';
 import { deliverToLeader } from '../src/push/deliver';
 import { importVapidSigningKey, vapidAuthorization } from '../src/push/vapid';
@@ -82,12 +82,17 @@ describe('VAPID', () => {
 
 describe('payload copy', () => {
   it('handles singular and plural, counts only', () => {
-    expect(leaderPayload(1)).toEqual({ title: 'Holy Nudge', body: '1 student is waiting on you', kind: 'leader', count: 1 });
-    expect(leaderPayload(3).body).toBe('3 students are waiting on you');
-    expect(adminPayload(12, 4, 3).body).toBe('12 students waiting across 4 leaders, 3 unassigned');
-    expect(adminPayload(1, 1, 0).body).toBe('1 student waiting across 1 leader');
-    expect(adminPayload(2, 0, 2).body).toBe('2 students waiting, 2 unassigned');
-    expect(alertPayload('datasource').body).toBe('Holy Nudge could not read ChMS this morning');
+    expect(leaderPayload(1)).toEqual({ title: '1 student is waiting on you', body: 'Tap to see who could use a hello', kind: 'leader', count: 1 });
+    expect(leaderPayload(3).title).toBe('3 students are waiting on you');
+    expect(adminPayload(12, 4, 3)).toMatchObject({ title: '12 students waiting', body: 'Across 4 leaders, 3 unassigned' });
+    expect(adminPayload(1, 1, 0)).toMatchObject({ title: '1 student waiting', body: 'Across 1 leader' });
+    expect(adminPayload(2, 0, 2)).toMatchObject({ title: '2 students waiting', body: '2 unassigned' });
+    expect(alertPayload('datasource').title).toBe('Could not read ChMS this morning');
+  });
+
+  it('never repeats the app name, which the phone already shows', () => {
+    const all = [leaderPayload(2), adminPayload(3, 1, 1), testPayload(), ...(['reauth', 'not_configured', 'incomplete', 'datasource', 'job'] as const).map(alertPayload)];
+    for (const p of all) expect(`${p.title} ${p.body}`).not.toMatch(/holy nudge/i);
   });
 });
 

@@ -56,11 +56,11 @@ describe('daily job', () => {
     const out = await runDailyJob({ config: cfg, store, sender, dataSource: () => source(), now: NOW });
     expect(out.ran).toBe(true);
 
-    expect(bodiesFor(sender, ids.lee1)).toEqual([{ title: 'Holy Nudge', body: '2 students are waiting on you', kind: 'leader', count: 2 }]);
-    expect(bodiesFor(sender, ids.mara).map((p) => p.body)).toEqual(['3 students waiting across 1 leader, 1 unassigned']);
-    expect(bodiesFor(sender, ids.milo).map((p) => p.body)).toEqual(['1 student waiting across 1 leader']);
+    expect(bodiesFor(sender, ids.lee1)).toEqual([{ title: '2 students are waiting on you', body: 'Tap to see who could use a hello', kind: 'leader', count: 2 }]);
+    expect(bodiesFor(sender, ids.mara).map((p) => `${p.title} | ${p.body}`)).toEqual(['3 students waiting | Across 1 leader, 1 unassigned']);
+    expect(bodiesFor(sender, ids.milo).map((p) => `${p.title} | ${p.body}`)).toEqual(['1 student waiting | Across 1 leader']);
     expect(bodiesFor(sender, ids.owner)).toEqual([
-      { title: 'Holy Nudge', body: '4 students waiting across 2 leaders, 1 unassigned', kind: 'admin', count: 4 },
+      { title: '4 students waiting', body: 'Across 2 leaders, 1 unassigned', kind: 'admin', count: 4 },
     ]);
     // No payload ever carries a name.
     for (const s of sender.sent) expect(JSON.stringify(s.payload)).not.toMatch(/Lee|Liv|Mara|Sam/);
@@ -129,7 +129,7 @@ describe('daily job', () => {
       await expect(runDailyJob({ config: cfg, store, sender, dataSource: () => ds, now: NOW })).rejects.toBeInstanceOf(JobFailedError);
       expect(store.runs[0]).toMatchObject({ ok: false, summary: { stage: 'datasource', reason: 'datasource', error: 'Error' } });
       expect(sender.sent).toEqual([
-        { endpoint: `https://push.example/${ids.owner}/0`, payload: { title: 'Holy Nudge', body: 'Holy Nudge could not read ChMS this morning', kind: 'alert', count: 0 } },
+        { endpoint: `https://push.example/${ids.owner}/0`, payload: { title: 'Could not read ChMS this morning', body: 'No nudges went out', kind: 'alert', count: 0 } },
       ]);
     });
     it('treats an empty process (e.g. after a Workflows migration) as a data-source failure', async () => {
@@ -146,7 +146,7 @@ describe('daily job', () => {
         runDailyJob({ config: pp, store, sender, dataSource: () => createDataSource(pp, {} as never, NOW), now: NOW }),
       ).rejects.toThrow(/credentials are not configured yet/);
       expect(store.runs[0]!.summary).toEqual({ stage: 'datasource', reason: 'not_configured', error: 'ChmsNotConfiguredError' });
-      expect(sender.sent.map((s) => s.payload.body)).toEqual(['Holy Nudge has no Pushpay credentials yet, so no nudges went out']);
+      expect(sender.sent.map((s) => s.payload.title)).toEqual(['No Pushpay credentials yet']);
     });
 
     it('sends the re-approval alert when pushpay has never been approved (no refresh token in D1)', async () => {
@@ -171,7 +171,7 @@ describe('daily job', () => {
       expect(sender.sent).toEqual([
         {
           endpoint: `https://push.example/${ids.owner}/0`,
-          payload: { title: 'Holy Nudge', body: 'Holy Nudge lost its Pushpay connection. A Master Admin needs to approve it again.', kind: 'alert', count: 0 },
+          payload: { title: 'Pushpay connection lost', body: 'A Master Admin needs to approve it again', kind: 'alert', count: 0 },
         },
       ]);
     });
@@ -196,10 +196,10 @@ describe('daily job', () => {
       });
     }
 
-    it('alert bodies are distinct, plain, and carry no data', () => {
+    it('alert titles are distinct, plain, and carry no data', () => {
       const reasons = ['reauth', 'not_configured', 'incomplete', 'datasource', 'job'] as const;
-      const bodies = reasons.map((r) => alertPayload(r).body);
-      expect(new Set(bodies).size).toBe(reasons.length);
+      const titles = reasons.map((r) => alertPayload(r).title);
+      expect(new Set(titles).size).toBe(reasons.length);
       for (const r of reasons) expect(alertPayload(r)).toMatchObject({ kind: 'alert', count: 0 });
       expect(alertReason('job', new ReauthorizationRequired('invalid_grant'))).toBe('reauth');
       expect(alertReason('job', new Error('x'))).toBe('job');

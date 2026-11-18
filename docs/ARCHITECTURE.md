@@ -141,7 +141,7 @@ All API errors: `{ "error": "<code>" }` with 4xx/5xx. Invalid or missing token: 
 - `POST /api/unsubscribe` body `{ "endpoint": "..." }` -> `{ "ok": true }`
 - `POST /api/test-push` -> `{ "ok": true, "sent": 1 }`
 
-Push payload (JSON, counts only): `{ "title": "Holy Nudge", "body": "3 students are waiting on you", "kind": "leader" | "admin" | "test" | "alert", "count": 3 }`.
+Push payload (JSON, counts only): `{ "title": "3 students are waiting on you", "body": "Tap to see who could use a hello", "kind": "leader" | "admin" | "test" | "alert", "count": 3 }`. The title carries the message (the phone already shows the app name); neither field repeats "Holy Nudge".
 
 ### `leaders` table additions
 
