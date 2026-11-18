@@ -1,6 +1,6 @@
 # Holy Nudge: build brief
 
-Act as orchestrator for this project: you plan, delegate implementation to worker subagents, review their work, and talk to me (Cameron). Work in `~/dev/holy-push` (empty folder; init a git repo there).
+Act as orchestrator for this project: you plan, delegate implementation to worker subagents, review their work, and talk to me (Cameron). Work in `~/dev/holy-nudge` (empty folder; init a git repo there).
 
 ## First: start a DNS session
 
