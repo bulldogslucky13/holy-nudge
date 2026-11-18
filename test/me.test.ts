@@ -32,13 +32,13 @@ describe('GET /api/me response', () => {
       behind: [
         {
           entryId: 'e1', queueId: 'q1', queueName: 'Outreach',
-          queueUrl: 'https://example.com/process_queue_list.php?queue_id=q1',
+          queueUrl: 'https://example.com/step_individuals.php?ax=my&step_id=q1',
           status: 'IN_PROCESS', due: '2026-01-08', daysOverdue: 7,
           individual: { name: 'Pat Example', phone: '555-0101', email: 'pat@example.com' },
         },
         {
           entryId: 'e2', queueId: 'q1', queueName: 'Outreach',
-          queueUrl: 'https://example.com/process_queue_list.php?queue_id=q1',
+          queueUrl: 'https://example.com/step_individuals.php?ax=my&step_id=q1',
           status: 'NOT_STARTED', due: '2026-01-20', daysOverdue: null,
           individual: { name: 'Sam', phone: null, email: null },
         },

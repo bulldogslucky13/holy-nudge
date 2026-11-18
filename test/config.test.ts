@@ -22,7 +22,7 @@ describe('config', () => {
   });
   it('builds queue URLs from the default or a configured template', () => {
     const ok = loadConfig();
-    expect(queueUrl(ok, '5')).toBe('https://wildwood.ccbchurch.com/process_queue_list.php?queue_id=5');
+    expect(queueUrl(ok, '5')).toBe('https://wildwood.ccbchurch.com/step_individuals.php?ax=my&step_id=5');
     const custom = parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q/{queueId}' });
     expect(queueUrl(custom, 'a b')).toBe('https://wildwood.ccbchurch.com/q/a%20b');
     expect(() => parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q' })).toThrow(/queueUrlTemplate/);

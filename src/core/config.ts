@@ -3,8 +3,8 @@ import type { DataSourceKind, HolyNudgeConfig } from './types';
 
 export class ConfigError extends Error {}
 
-/** UNVERIFIED guess at the ChMS web UI queue page; override with queueUrlTemplate in config. */
-export const DEFAULT_QUEUE_URL_TEMPLATE = '{chmsBaseUrl}/process_queue_list.php?queue_id={queueId}';
+/** ChMS web UI queue page, pattern taken from real queue URLs (2026-11-17). Assumes the API queue id equals the web step_id; confirm with live data. */
+export const DEFAULT_QUEUE_URL_TEMPLATE = '{chmsBaseUrl}/step_individuals.php?ax=my&step_id={queueId}';
 
 /** Deep link to a queue in the ChMS web UI, from config.queueUrlTemplate (or the default). */
 export function queueUrl(config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'queueUrlTemplate'>, queueId: string): string {

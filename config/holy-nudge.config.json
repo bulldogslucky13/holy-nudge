@@ -9,5 +9,5 @@
   "morningHour": 8,
   "dataSource": "fixture",
   "chmsBaseUrl": "https://wildwood.ccbchurch.com",
-  "queueUrlTemplate": "{chmsBaseUrl}/process_queue_list.php?queue_id={queueId}"
+  "queueUrlTemplate": "{chmsBaseUrl}/step_individuals.php?ax=my&step_id={queueId}"
 }
