@@ -1,0 +1,9 @@
+# Security headers for static files. Pages applies this file only to static assets, NOT to responses
+# from Functions (/l/<token>, /manifest.webmanifest, /api/*, /oauth/*): those set the same headers in
+# code (src/api/headers.ts). Keep both in step; test/headers.test.ts compares them.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
+  Strict-Transport-Security: max-age=31536000
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff

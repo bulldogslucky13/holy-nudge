@@ -1,6 +1,7 @@
 // GET /oauth/start?key=<OAUTH_SETUP_KEY>
 // Owner-only entry to the Pushpay approval flow: stores a one-time CSRF state and sends the
 // browser (the Master Admin's) to Pushpay's authorize page. The redirect URI is a constant.
+import { securityHeaders } from '../../src/api/headers';
 import {
   authorizeUrl,
   constantTimeEqual,
@@ -12,7 +13,8 @@ import {
 } from '../../src/chms/oauth';
 
 export const onRequestGet: PagesFunction<OAuthEnvInput> = async ({ request, env }) => {
-  const missing = missingSettings(env, ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET', 'OAUTH_SETUP_KEY']);
+  // TOKEN_ENC_KEY too: no point approving if the tokens could not be stored encrypted.
+  const missing = missingSettings(env, ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET', 'OAUTH_SETUP_KEY', 'TOKEN_ENC_KEY']);
   if (missing.length > 0 || !env.CHMS_CLIENT_ID || !env.CHMS_CLIENT_SECRET || !env.OAUTH_SETUP_KEY) {
     // Names only, to the log; the page stays plain.
     console.warn(`oauth start: not configured (${missing.join(', ')} missing)`);
@@ -27,9 +29,9 @@ export const onRequestGet: PagesFunction<OAuthEnvInput> = async ({ request, env 
   return new Response(null, {
     status: 302,
     headers: {
+      ...securityHeaders(),
       Location: authorizeUrl({ ...env, CHMS_CLIENT_ID: env.CHMS_CLIENT_ID }, state),
       'Cache-Control': 'no-store',
-      'Referrer-Policy': 'no-referrer',
     },
   });
 };

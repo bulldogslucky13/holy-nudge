@@ -3,6 +3,7 @@ import { ChmsNotConfiguredError } from '../chms/oauth';
 import { IncompleteDataError } from '../chms/pushpay';
 import { ReauthorizationRequired, TokenPersistError } from '../chms/tokens';
 import { computeNudges } from '../core/behind';
+import { errorClassName } from '../core/errors';
 import type { DataSource, HolyNudgeConfig } from '../core/types';
 import type { JobRunSummary, LeaderRow, Store } from '../db';
 import { addCounts, deliverToLeader, emptyCounts, type DeliveryCounts } from '../push/deliver';
@@ -31,14 +32,36 @@ export interface JobDeps {
 
 export type JobOutcome = { ran: false; reason: 'outside_morning_hour'; localHour: number } | { ran: true; summary: JobRunSummary };
 
+/**
+ * The job failed (run recorded, owners alerted). Carries only the stage, the alert reason and the
+ * underlying error's CLASS NAME: never its message or the error itself, because upstream messages can
+ * echo ChMS values. Deliberately no `cause`, so a runtime that prints cause chains has nothing to print.
+ */
 export class JobFailedError extends Error {
+  readonly reason: AlertReason;
+  readonly errorName: string;
   constructor(
     readonly stage: 'datasource' | 'job',
     cause: unknown,
   ) {
-    super(`Holy Nudge daily job failed at ${stage}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    const reason = alertReason(stage, cause);
+    const errorName = errorClassName(cause);
+    super(`Holy Nudge daily job failed at ${stage} (${reason}, ${errorName})`);
     this.name = 'JobFailedError';
+    this.reason = reason;
+    this.errorName = errorName;
   }
+}
+
+export { errorClassName };
+
+/**
+ * The one log line for a failed run: stage, reason and error class only. Anything that is not a
+ * JobFailedError (failure before the run was recorded, e.g. missing VAPID keys) gets its class name only.
+ */
+export function describeFailure(err: unknown): string {
+  if (err instanceof JobFailedError) return `holy-nudge job failed: stage=${err.stage} reason=${err.reason} error=${err.errorName}`;
+  return `holy-nudge job failed before the run was recorded: error=${errorClassName(err)}`;
 }
 
 export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
@@ -102,12 +125,13 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     await store.finishJobRun(runId, true, summary, new Date());
     return { ran: true, summary };
   } catch (err) {
-    // Counts and error class only: messages could echo API data.
-    const errorName = err instanceof Error ? err.name : 'unknown';
-    const reason = alertReason(stage, err);
-    await store.finishJobRun(runId, false, { stage, reason, error: errorName }, new Date()).catch(() => undefined);
-    await alertOwners(store, sender, reason, now).catch(() => undefined);
-    throw new JobFailedError(stage, err);
+    // Stage, reason and error class only: messages could echo API data.
+    const failed = new JobFailedError(stage, err);
+    await store
+      .finishJobRun(runId, false, { stage, reason: failed.reason, error: failed.errorName }, new Date())
+      .catch(() => undefined);
+    await alertOwners(store, sender, failed.reason, now).catch(() => undefined);
+    throw failed;
   }
 }
 

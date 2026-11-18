@@ -36,3 +36,6 @@ export function config(over: Partial<HolyNudgeConfig> = {}): HolyNudgeConfig {
     ...over,
   };
 }
+
+/** A throwaway TOKEN_ENC_KEY for tests (32 bytes of 0x07, base64url). */
+export const TEST_TOKEN_KEY = 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc';

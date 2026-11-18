@@ -2,6 +2,8 @@
 // endpoint client, CSRF state, and the small HTML pages shown by /oauth/*.
 // Sources: https://docs.pushpay.io/chms-v2/docs/getting-started.md (fetched 2026-11-17).
 // Never log token values, codes, client secrets or the setup key.
+import { securityHeaders, CSP } from '../api/headers';
+import { isValidTokenKey } from './tokenbox';
 
 /** Bindings the OAuth pieces need. The backend's Env must be a superset of this. */
 export interface OAuthEnv {
@@ -19,17 +21,21 @@ export interface OAuthEnv {
   CHMS_API_HOST?: string;
   /** Var, optional. Church subdomain; when set, the authorize page skips asking for it. */
   CHMS_SUBDOMAIN?: string;
+  /** Secret. 32 random bytes, base64url: AES-256-GCM key for the tokens in oauth_tokens (src/chms/tokenbox.ts). */
+  TOKEN_ENC_KEY: string;
 }
 
+type CredentialName = 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'OAUTH_SETUP_KEY' | 'TOKEN_ENC_KEY';
+
 /** What the host actually provides: the credentials may not be set yet (fixture mode). */
-export type OAuthEnvInput = Omit<OAuthEnv, 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'OAUTH_SETUP_KEY'> &
-  Partial<Pick<OAuthEnv, 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'OAUTH_SETUP_KEY'>>;
+export type OAuthEnvInput = Omit<OAuthEnv, CredentialName> & Partial<Pick<OAuthEnv, CredentialName>>;
 
-type CredentialName = 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'OAUTH_SETUP_KEY';
-
-/** Names (never values) of the given settings that are missing or empty. */
+/**
+ * Names (never values) of the given settings that are missing or empty. A TOKEN_ENC_KEY that is
+ * not 32 bytes of base64url counts as missing: tokens are never stored or read unencrypted.
+ */
 export function missingSettings(env: Partial<Record<CredentialName, string>>, names: readonly CredentialName[]): CredentialName[] {
-  return names.filter((n) => !env[n]);
+  return names.filter((n) => (n === 'TOKEN_ENC_KEY' ? !isValidTokenKey(env[n]) : !env[n]));
 }
 
 /** A ChMS credential the current operation needs is not set. The message names settings, never values. */
@@ -38,7 +44,8 @@ export class ChmsNotConfiguredError extends Error {
   constructor(readonly missing: string[]) {
     super(
       `Pushpay ChMS credentials are not configured yet: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set. ` +
-        'Set them with `wrangler pages secret put` / `wrangler secret put` (see README), or keep "dataSource": "fixture".',
+        'Set them (TOKEN_ENC_KEY must be 32 random bytes, base64url) with `wrangler pages secret put` / `wrangler secret put` ' +
+        '(see README), or keep "dataSource": "fixture".',
     );
   }
 }
@@ -47,7 +54,8 @@ export class ChmsNotConfiguredError extends Error {
 export const REDIRECT_URI = 'https://holynudge.cameronbristol.xyz/oauth/callback';
 
 /**
- * The scopes requested in the API access request. The form scopes are for a later feature.
+ * The scopes requested in the API access request (owner's decision: keep all six).
+ * The three form scopes are reserved for a planned feature and unused today.
  * SANDBOX: the authorize request fails if any of these is not among the scopes Pushpay
  * granted the app; if approval comes back narrower, trim this list.
  */
@@ -246,22 +254,28 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
+/** The OAuth pages' only style. Allowed by hash in their CSP (no 'unsafe-inline'). */
+export const OAUTH_PAGE_STYLE =
+  'body{font-family:system-ui,-apple-system,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.5;color:#222;background:#fffdf8}' +
+  '@media (prefers-color-scheme:dark){body{color:#eee;background:#1b1a17}}h1{font-size:1.4rem}';
+/** base64 SHA-256 of OAUTH_PAGE_STYLE (test/headers.test.ts recomputes it). */
+export const OAUTH_PAGE_STYLE_HASH = 'sha256-dk94l/gLNo01sOyyEbEDxRiHTkzxNDxbAf+FUZGU3Q8=';
+export const OAUTH_PAGE_CSP = CSP.replace("style-src 'self'", `style-src '${OAUTH_PAGE_STYLE_HASH}'`);
+
 /** A tiny self-contained page: no scripts, no external resources (so no Referer leaks the code). */
 export function htmlPage(status: number, title: string, message: string): Response {
   const body = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex"><title>${escapeHtml(title)}</title>
-<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.5;color:#222;background:#fffdf8}
-@media (prefers-color-scheme:dark){body{color:#eee;background:#1b1a17}}h1{font-size:1.4rem}</style></head>
+<style>${OAUTH_PAGE_STYLE}</style></head>
 <body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></body></html>`;
   return new Response(body, {
     status,
     headers: {
+      ...securityHeaders(OAUTH_PAGE_CSP),
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
-      'Referrer-Policy': 'no-referrer',
       'X-Robots-Tag': 'noindex',
-      'X-Content-Type-Options': 'nosniff',
     },
   });
 }

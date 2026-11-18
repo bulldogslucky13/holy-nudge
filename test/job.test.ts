@@ -6,9 +6,9 @@ import { alertPayload } from '../src/push/payload';
 import { createTestD1 } from './sqlite-d1';
 import { createDataSource } from '../src/chms/index';
 import type { DataSource, QueueEntry } from '../src/core/types';
-import { JobFailedError, alertReason, localHour, runDailyJob } from '../src/job/daily';
+import { JobFailedError, alertReason, describeFailure, localHour, runDailyJob } from '../src/job/daily';
 import { FakeSender, FakeStore } from './fakes';
-import { config, entry, person, queue } from './helpers';
+import { config, entry, person, queue, TEST_TOKEN_KEY } from './helpers';
 
 const cfg = config({ excludedQueues: ['Not Interested'] });
 const NOW = new Date('2026-01-15T14:00:00Z'); // 08:00 CST
@@ -69,7 +69,7 @@ describe('daily job', () => {
     const chmsIds = store.leaders.map((l) => l.chmsIndividualId).filter(Boolean).sort();
     expect(chmsIds).toEqual(['L1', 'L2', 'M1', 'M2']);
     // Existing rows keep their token.
-    expect(store.leaders.find((l) => l.id === ids.lee1)!.token).toBe(`tok-${ids.lee1}`);
+    expect(store.leaders.find((l) => l.id === ids.lee1)!.linkToken).toBe(`tok-${ids.lee1}`);
 
     // The 410 device was removed.
     expect(store.subs.filter((s) => s.leaderId === ids.lee1)).toHaveLength(1);
@@ -144,7 +144,7 @@ describe('daily job', () => {
       const pp = config({ dataSource: 'pushpay' });
       await expect(
         runDailyJob({ config: pp, store, sender, dataSource: () => createDataSource(pp, {} as never, NOW), now: NOW }),
-      ).rejects.toThrow(/credentials are not configured yet/);
+      ).rejects.toThrow(/not_configured, ChmsNotConfiguredError/);
       expect(store.runs[0]!.summary).toEqual({ stage: 'datasource', reason: 'not_configured', error: 'ChmsNotConfiguredError' });
       expect(sender.sent.map((s) => s.payload.title)).toEqual(['No Pushpay credentials yet']);
     });
@@ -153,7 +153,7 @@ describe('daily job', () => {
       const { store, sender, ids } = setup();
       const t = await createTestD1('migrations/0002_oauth.sql');
       const pp = config({ dataSource: 'pushpay' });
-      const env = { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's' };
+      const env = { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', TOKEN_ENC_KEY: TEST_TOKEN_KEY };
       const calls: string[] = [];
       vi.stubGlobal('fetch', async (u: RequestInfo | URL) => {
         calls.push(String(u));
@@ -195,6 +195,37 @@ describe('daily job', () => {
         expect(sender.sent[0]!.payload).toEqual(alertPayload(reason as Parameters<typeof alertPayload>[0]));
       });
     }
+
+    it('treats pushpay with credentials but no valid TOKEN_ENC_KEY as not configured (never plaintext)', async () => {
+      const pp = config({ dataSource: 'pushpay' });
+      for (const key of [undefined, '', 'short', 'a'.repeat(44)]) {
+        const { store, sender } = setup();
+        const env = { DB: {} as D1Database, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', TOKEN_ENC_KEY: key };
+        await expect(
+          runDailyJob({ config: pp, store, sender, dataSource: () => createDataSource(pp, env as never, NOW), now: NOW }),
+        ).rejects.toBeInstanceOf(JobFailedError);
+        expect(store.runs[0]!.summary).toEqual({ stage: 'datasource', reason: 'not_configured', error: 'ChmsNotConfiguredError' });
+      }
+    });
+
+    it('never puts upstream error messages in the thrown error, the log line or job_runs', async () => {
+      const secret = 'Pat Example 405-555-0101 due "2026-13-45" status "WEIRD" entry 98765';
+      const { store, sender } = setup();
+      const ds = source({ listEntries: async () => { throw new TypeError(secret); } });
+      const err = await runDailyJob({ config: cfg, store, sender, dataSource: () => ds, now: NOW }).catch((e) => e);
+      expect(err).toBeInstanceOf(JobFailedError);
+      expect(err.cause).toBeUndefined();
+      const line = describeFailure(err);
+      expect(line).toBe('holy-nudge job failed: stage=datasource reason=datasource error=TypeError');
+      for (const text of [err.message, String(err.stack), line, JSON.stringify(store.runs)]) {
+        expect(text).not.toMatch(/Pat|555|2026-13|WEIRD|98765/);
+      }
+      // Anything else (failure before the run is recorded) logs only its class name.
+      expect(describeFailure(new Error(secret))).toBe('holy-nudge job failed before the run was recorded: error=Error');
+      const odd = new Error('x');
+      odd.name = 'Pat Example';
+      expect(describeFailure(odd)).toBe('holy-nudge job failed before the run was recorded: error=unknown');
+    });
 
     it('alert titles are distinct, plain, and carry no data', () => {
       const reasons = ['reauth', 'not_configured', 'incomplete', 'datasource', 'job'] as const;

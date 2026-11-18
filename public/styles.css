@@ -323,6 +323,25 @@ details.group > .list { padding: 4px 4px 8px; }
 .row .name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .row .btns { display: flex; gap: 8px; }
 
+/* ---------- leader links (staff) ---------- */
+
+.card > .btns, .minted .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip.good { background: var(--ok-soft); color: var(--ok); }
+.minted { gap: 10px; }
+.link-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+/* ---------- small layout helpers (instead of style attributes, so the CSP needs no 'unsafe-inline') ---------- */
+
+.gap-top { margin-top: 8px; }
+.gap-bottom { margin-bottom: 16px; }
+.copy-buffer { position: fixed; top: 0; left: 0; opacity: 0; font-size: 16px; }
+
 .footer { margin-top: 28px; display: grid; gap: 10px; justify-items: center; text-align: center; }
 
 @media (prefers-reduced-motion: no-preference) {

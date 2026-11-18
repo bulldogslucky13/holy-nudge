@@ -21,6 +21,7 @@
     try {
       if (op === 'get') return window.localStorage.getItem(key);
       if (op === 'set') window.localStorage.setItem(key, value);
+      if (op === 'del') window.localStorage.removeItem(key);
     } catch (_) {
       /* private mode or blocked storage: carry on without it */
     }
@@ -38,23 +39,59 @@
     return null;
   }
 
-  function getToken() {
-    if (mock) return 'mock-token';
+  /* The token from /l/<token>, if the page was opened that way. */
+  function getPathToken() {
     var m = location.pathname.match(/^\/l\/([^/]+)\/?$/);
-    if (m) {
-      var t;
-      try {
-        t = decodeURIComponent(m[1]);
-      } catch (_) {
-        t = m[1];
-      }
-      store('set', TOKEN_KEY, t);
-      return t;
+    if (!m) return null;
+    try {
+      return decodeURIComponent(m[1]);
+    } catch (_) {
+      return m[1];
     }
-    return store('get', TOKEN_KEY);
   }
 
-  var token = null;
+  var token = null; // the token in use for API calls
+  var pathToken = null; // token from the URL (an installed iPhone app always opens its original link)
+  var storedToken = null; // last token the server accepted on this device
+
+  /* Remember a token only once the server has accepted it, here and in the service worker. */
+  function rememberToken(t) {
+    if (mock || !t) return;
+    storedToken = t;
+    store('set', TOKEN_KEY, t);
+    sendTokenToSW();
+  }
+
+  /* On any 401: the link is unknown or was turned off. Forget it everywhere on this device. */
+  function forgetToken() {
+    token = null;
+    storedToken = null;
+    store('del', TOKEN_KEY);
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.ready
+      .then(function (reg) {
+        var target = reg.active || navigator.serviceWorker.controller;
+        if (target) target.postMessage({ type: 'forget-token' });
+      })
+      .catch(function () {});
+  }
+
+  /*
+   * The URL's token was refused, but this device holds a different one the server accepted before
+   * (for example staff made themselves a new link inside the installed app, which still opens the
+   * old link). Switch to it instead of locking them out.
+   */
+  function switchToStoredToken() {
+    if (mock || !storedToken || token === storedToken) return false;
+    token = storedToken;
+    pathToken = null;
+    try {
+      history.replaceState(null, '', '/l/' + encodeURIComponent(token));
+    } catch (_) {
+      /* ignore */
+    }
+    return true;
+  }
 
   /* ---------------------------------------------------------------- tiny DOM helper */
 
@@ -174,12 +211,21 @@
       status: status,
       due: due,
       daysOverdue: daysOverdue,
-      individual: { name: name, phone: phone, email: name.toLowerCase().replace(/[^a-z]+/g, '.') + '@example.com' },
+      individual: { name: name, phone: phone },
     };
     if (!phone) delete item.individual.phone;
     if (extra) Object.keys(extra).forEach(function (k) { item[k] = extra[k]; });
     return item;
   }
+
+  var hoursAgo = function (h) { return new Date(Date.now() - h * 3600000).toISOString(); };
+  var mockLeaders = [
+    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, canManage: true, isYou: false },
+    { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, canManage: true, isYou: false },
+    { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, canManage: true, isYou: true },
+    { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, canManage: true, isYou: false },
+    { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, canManage: false, isYou: false },
+  ];
 
   function mockMe() {
     var admin = mock === 'admin';
@@ -207,17 +253,13 @@
           { leader: { name: 'Devon Mockford' }, notificationsOn: false, items: [mockItem('e20', 'q5', 'Service Team', 'WAITING', '2026-11-12', 5, 'Ash Fictional', '405-555-0120')] },
         ],
         leadersWithoutNotifications: [{ name: 'Devon Mockford' }, { name: 'Lee Madeup' }],
-        leaderLinks: [
-          { name: 'Sam Fakename', url: 'https://holynudge.cameronbristol.xyz/l/mock-link-sam' },
-          { name: 'Devon Mockford', url: 'https://holynudge.cameronbristol.xyz/l/mock-link-devon' },
-          { name: 'Lee Madeup', url: 'https://holynudge.cameronbristol.xyz/l/mock-link-lee' },
-        ],
+        leaders: mockLeaders,
       };
     }
     return me;
   }
 
-  function mockApi(path, method) {
+  function mockApi(path, method, body) {
     return new Promise(function (resolve, reject) {
       setTimeout(function () {
         if (mock === 'invalid') return reject(new ApiError(401, 'invalid_token'));
@@ -225,6 +267,14 @@
         if (path === '/api/vapid-public-key') return resolve({ key: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U' });
         if (path === '/api/subscribe' && method === 'POST') return resolve({ ok: true });
         if (path === '/api/test-push' && method === 'POST') return resolve({ ok: true, sent: 1 });
+        if (path === '/api/leader-link' && method === 'POST') {
+          var row = mockLeaders.filter(function (l) { return l.id === (body && body.leaderId); })[0];
+          if (!row) return reject(new ApiError(404, 'not_found'));
+          if (!row.canManage) return reject(new ApiError(403, 'owner_protected'));
+          var fake = 'mock' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + 'link';
+          return resolve({ url: location.origin + '/l/' + fake, self: !!row.isYou });
+        }
+        if (path === '/api/leader-revoke' && method === 'POST') return resolve({ ok: true });
         reject(new ApiError(404, 'not_found'));
       }, 250);
     });
@@ -240,7 +290,7 @@
   function api(path, opts) {
     var o = opts || {};
     var method = o.method || 'GET';
-    if (mock) return mockApi(path, method);
+    if (mock) return mockApi(path, method, o.body);
     var headers = { Authorization: 'Bearer ' + token };
     if (o.body) headers['Content-Type'] = 'application/json';
     return fetch(path, {
@@ -249,7 +299,12 @@
       body: o.body ? JSON.stringify(o.body) : undefined,
       cache: 'no-store',
     }).then(function (res) {
-      if (res.status === 401) throw new ApiError(401, 'invalid_token');
+      if (res.status === 401) {
+        // Try this device's previously accepted token once; otherwise forget the dead link everywhere.
+        if (switchToStoredToken()) throw new ApiError(401, 'retry');
+        forgetToken();
+        throw new ApiError(401, 'invalid_token');
+      }
       return res
         .json()
         .catch(function () {
@@ -265,7 +320,7 @@
   /* ---------------------------------------------------------------- service worker */
 
   function sendTokenToSW() {
-    if (!token || !('serviceWorker' in navigator)) return;
+    if (mock || !token || token !== storedToken || !('serviceWorker' in navigator)) return;
     navigator.serviceWorker.ready
       .then(function (reg) {
         var target = reg.active || navigator.serviceWorker.controller;
@@ -382,6 +437,8 @@
     tab: 'mine',
     skipped: session('get', SKIP_KEY) === '1',
     loadedAt: 0,
+    errorCode: null,
+    minted: {}, // leader id -> URL just minted (memory only, shown once, gone on reload)
   };
 
   function needsOnboarding() {
@@ -396,6 +453,7 @@
     if (!silent) show(loadingScreen());
     return api('/api/me')
       .then(function (me) {
+        rememberToken(token);
         return detectEnv().then(function (env) {
           S.me = me;
           S.env = env;
@@ -408,9 +466,12 @@
         });
       })
       .catch(function (e) {
+        if (e instanceof ApiError && e.code === 'retry') return load(silent);
         if (e instanceof ApiError && e.status === 401) {
+          S.me = null;
           S.view = 'invalid';
         } else if (!silent || !S.me) {
+          S.errorCode = e instanceof ApiError ? e.code : null;
           S.view = 'error';
         } else return;
         render();
@@ -480,6 +541,16 @@
   }
 
   function errorScreen() {
+    if (S.errorCode === 'rate_limited') {
+      return h(
+        'div',
+        { class: 'screen center' },
+        markImg(),
+        h('h1', {}, 'Let’s take a little breather'),
+        h('p', { class: 'lead' }, 'Your list has been refreshed a lot in the last few minutes. Give it a few minutes and try again.'),
+        h('button', { class: 'btn primary', type: 'button', onclick: function () { load(); } }, 'Try again')
+      );
+    }
     return h(
       'div',
       { class: 'screen center' },
@@ -535,7 +606,7 @@
       var steps = [];
       if (!env.safari) {
         steps.push(
-          h('li', {}, h('div', {}, h('strong', {}, 'Open this link in Safari. '), 'It looks like you’re in another browser or inside an app. Tap its menu and choose “Open in Safari”, or copy the link and paste it into Safari.', h('div', { style: 'margin-top:8px' }, copyLinkButton())))
+          h('li', {}, h('div', {}, h('strong', {}, 'Open this link in Safari. '), 'It looks like you’re in another browser or inside an app. Tap its menu and choose “Open in Safari”, or copy the link and paste it into Safari.', h('div', { class: 'gap-top' }, copyLinkButton())))
         );
       }
       steps.push(
@@ -603,7 +674,7 @@
       'div',
       { class: 'screen' },
       markImg(),
-      h('div', {}, h('h1', {}, title), env.ios && !env.standalone ? h('p', { class: 'lead', style: 'margin-top:8px' }, 'Just a minute of setup and then you’re done.') : null),
+      h('div', {}, h('h1', {}, title), env.ios && !env.standalone ? h('p', { class: 'lead gap-top' }, 'Just a minute of setup and then you’re done.') : null),
       body,
       skipButton()
     );
@@ -660,6 +731,9 @@
           S.view = 'invalid';
           return render();
         }
+        if (e instanceof ApiError && e.code === 'subscription_conflict') {
+          return say('This device is already getting nudges for someone else’s link. Ask Cameron if that’s a surprise.', 'err');
+        }
         say('Something went wrong turning notifications on. Please try again in a moment.', 'err');
       });
   }
@@ -701,7 +775,7 @@
       'div',
       { class: 'screen' },
       markImg(),
-      h('div', {}, h('h1', {}, 'You’re all set'), h('p', { class: 'lead', style: 'margin-top:8px' }, 'Nudges are on. Want to see what one looks like?')),
+      h('div', {}, h('h1', {}, 'You’re all set'), h('p', { class: 'lead gap-top' }, 'Nudges are on. Want to see what one looks like?')),
       test,
       statusEl,
       h('button', { class: 'btn', type: 'button', onclick: function () { S.view = 'main'; render(); } }, 'Show my list')
@@ -724,9 +798,12 @@
             statusEl.textContent = 'Nothing went out, because no device is signed up yet. Try turning notifications on again.';
           }
         })
-        .catch(function () {
+        .catch(function (e) {
           statusEl.className = 'status-line err';
-          statusEl.textContent = 'That didn’t go through. Please try again in a moment.';
+          statusEl.textContent =
+            e instanceof ApiError && e.status === 429
+              ? 'You’ve sent a few tests already. Try again in a few minutes.'
+              : 'That didn’t go through. Please try again in a moment.';
         })
         .then(function () {
           btn.disabled = false;
@@ -752,7 +829,7 @@
   }
 
   function legacyCopy(text) {
-    var ta = h('textarea', { readonly: true, 'aria-hidden': 'true', style: 'position:fixed;top:0;left:0;opacity:0;font-size:16px' });
+    var ta = h('textarea', { class: 'copy-buffer', readonly: true, 'aria-hidden': 'true' });
     ta.value = text;
     document.body.appendChild(ta);
     ta.focus();
@@ -772,7 +849,7 @@
     return ok;
   }
 
-  function mailtoFor(link) {
+  function mailtoFor(link) { // { name, url }
     var subject = 'Your Holy Nudge link';
     var body =
       'Hi ' + firstName(link.name) + ',\n\n' +
@@ -794,7 +871,7 @@
       kids.push(h('a', { class: 'btn', href: 'tel:' + phone, 'aria-label': 'Call ' + (ind.name || '') }, 'Call'));
     }
     if (item.queueUrl) {
-      kids.push(h('a', { class: 'btn primary', href: item.queueUrl, target: '_blank', rel: 'noopener', 'aria-label': 'Open ' + (ind.name || 'this person') + ' in ChMS' }, 'Open in ChMS'));
+      kids.push(h('a', { class: 'btn primary', href: item.queueUrl, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Open ' + (ind.name || 'this person') + ' in ChMS' }, 'Open in ChMS'));
     }
     return h('div', { class: 'actions' }, kids);
   }
@@ -894,7 +971,7 @@
     if (S.env.ios && !S.env.standalone && S.me.leader.notificationsOn) return null;
     return h(
       'div',
-      { class: 'panel notice', style: 'margin-bottom:16px' },
+      { class: 'panel notice gap-bottom' },
       h('p', {}, 'Notifications are off on this device, so we can’t nudge you in the morning.'),
       h('button', { class: 'btn primary', type: 'button', onclick: function () { S.skipped = false; session('del', SKIP_KEY); S.view = 'onboarding'; render(); } }, 'Turn them on')
     );
@@ -949,51 +1026,181 @@
   function teamView() {
     var a = S.me.admin;
     var off = a.leadersWithoutNotifications;
+    var staff = Array.isArray(a.leaders); // link management is for staff only
 
     var offSection = h(
       'section',
       { class: 'section' },
       h('h2', {}, 'Haven’t turned on notifications'),
-      off.length ? h('p', { class: 'muted' }, 'A friendly reminder to these folks (their link is below) will help.') : null,
+      off.length ? h('p', { class: 'muted' }, staff ? 'A friendly reminder to these folks will help. If someone has lost their link, you can make them a new one below.' : 'A friendly reminder to these folks will help.') : null,
       off.length
         ? h('ul', { class: 'list' }, off.map(function (l) { return h('li', { class: 'card' }, h('div', { class: 'row' }, h('span', { class: 'name' }, l.name))); }))
         : emptyState('🔔', 'Everyone is set up', 'All your leaders have notifications on.')
     );
+    return h('div', {}, offSection, staff ? leadersSection(a.leaders) : null);
+  }
 
-    var links = a.leaderLinks || [];
-    var linkSection = h(
+  function leadersSection(leaders) {
+    return h(
       'section',
       { class: 'section' },
       h('h2', {}, 'Leader links'),
-      h('p', { class: 'muted' }, 'Each link is personal. Send it once; please don’t post it anywhere public.'),
-      links.length
-        ? h('ul', { class: 'list' }, links.map(linkRow))
-        : h('p', { class: 'muted' }, 'No links yet. They appear after the first morning run.')
+      h('p', { class: 'muted' }, 'Each link is personal and works like a password. A new link is shown just once, so send it straight away. Making a new one turns the old one off.'),
+      leaders.length
+        ? h('ul', { class: 'list' }, leaders.map(leaderRow))
+        : h('p', { class: 'muted' }, 'No leaders yet. They appear after the first morning run.')
     );
-    return h('div', {}, offSection, linkSection);
   }
 
-  function linkRow(link) {
+  function lastSeenWords(iso) {
+    var t = iso ? Date.parse(iso) : NaN;
+    if (isNaN(t)) return 'Hasn’t opened Holy Nudge yet';
+    var hours = (Date.now() - t) / 3600000;
+    if (hours < 1) return 'Opened Holy Nudge in the last hour';
+    if (hours < 24) return 'Last opened ' + Math.floor(hours) + ' ' + plural(Math.floor(hours), 'hour', 'hours') + ' ago';
+    var days = Math.floor(hours / 24);
+    return 'Last opened ' + days + ' ' + plural(days, 'day', 'days') + ' ago';
+  }
+
+  function linkErrorWords(e) {
+    var code = e instanceof ApiError ? e.code : '';
+    if (code === 'owner_protected') return 'Only the owner can change the owner’s link.';
+    if (code === 'forbidden') return 'Only staff can change links.';
+    if (code === 'cannot_revoke_self') return 'You can’t turn off your own link here, but you can make yourself a new one.';
+    if (code === 'rate_limited') return 'That’s a lot of link changes. Give it a few minutes and try again.';
+    if (code === 'not_found') return 'We couldn’t find that leader. Try Refresh.';
+    return 'That didn’t go through. Please try again in a moment.';
+  }
+
+  /* Re-render without jumping back to the top of the page. */
+  function renderInPlace() {
+    var y = window.scrollY;
+    render();
+    window.scrollTo(0, y);
+  }
+
+  /* Staff made themselves a new link: use it from now on so this device is not locked out. */
+  function adoptOwnNewLink(url) {
+    var m;
+    try {
+      m = new URL(url).pathname.match(/^\/l\/([^/]+)$/);
+    } catch (_) {
+      m = null;
+    }
+    if (!m || mock) return;
+    token = decodeURIComponent(m[1]);
+    pathToken = token;
+    rememberToken(token);
+    try {
+      history.replaceState(null, '', '/l/' + encodeURIComponent(token));
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  function mintLink(l, btn, statusEl) {
+    var msg = l.isYou
+      ? 'This replaces your own link. This device switches to the new one; anywhere else you use Holy Nudge will need the new link.'
+      : l.hasLink
+        ? 'This replaces ' + l.name + '’s current link. Their old link stops working right away.'
+        : 'Make a personal link for ' + l.name + '?';
+    if (!window.confirm(msg)) return;
+    btn.disabled = true;
+    statusEl.className = 'status-line small';
+    statusEl.textContent = 'Making a new link…';
+    api('/api/leader-link', { method: 'POST', body: { leaderId: l.id } })
+      .then(function (res) {
+        if (res.self) adoptOwnNewLink(res.url);
+        S.minted[l.id] = res.url;
+        l.hasLink = true;
+        renderInPlace();
+      })
+      .catch(function (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          S.view = 'invalid';
+          return render();
+        }
+        btn.disabled = false;
+        statusEl.className = 'status-line small err';
+        statusEl.textContent = linkErrorWords(e);
+      });
+  }
+
+  function revokeLink(l, btn, statusEl) {
+    if (!window.confirm('Turn off ' + l.name + '’s link? It stops working right away and their notifications stop. You can make them a new link any time.')) return;
+    btn.disabled = true;
+    statusEl.className = 'status-line small';
+    statusEl.textContent = 'Turning it off…';
+    api('/api/leader-revoke', { method: 'POST', body: { leaderId: l.id } })
+      .then(function () {
+        delete S.minted[l.id];
+        l.hasLink = false;
+        l.notificationsOn = false;
+        renderInPlace();
+      })
+      .catch(function (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          S.view = 'invalid';
+          return render();
+        }
+        btn.disabled = false;
+        statusEl.className = 'status-line small err';
+        statusEl.textContent = linkErrorWords(e);
+      });
+  }
+
+  function mintedPanel(l, url) {
     var label = h('span', {}, 'Copy');
+    return h(
+      'div',
+      { class: 'panel notice minted' },
+      h('p', { class: 'small' }, l.isYou
+        ? 'Here’s your new link. This device already uses it. It’s shown only this once.'
+        : 'Here’s ' + firstName(l.name) + '’s new link. It’s shown only this once, so copy or email it now.'),
+      h('p', { class: 'link-text' }, url),
+      h(
+        'div',
+        { class: 'btns' },
+        h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'Copy the new link for ' + l.name, onclick: function () {
+          copyText(url).then(function (ok) {
+            label.textContent = ok ? 'Copied' : 'Hold to copy';
+            setTimeout(function () { label.textContent = 'Copy'; }, 2000);
+          });
+        } }, label),
+        h('a', { class: 'btn small-btn primary', href: mailtoFor({ name: l.name, url: url }), 'aria-label': 'Email the new link to ' + l.name }, 'Email'),
+        h('button', { class: 'btn small-btn link', type: 'button', onclick: function () { delete S.minted[l.id]; renderInPlace(); } }, 'Done')
+      )
+    );
+  }
+
+  function leaderRow(l) {
+    var statusEl = h('p', { class: 'status-line small', role: 'status' });
+    var minted = S.minted[l.id];
+    var btns = [];
+    if (l.canManage) {
+      var mintBtn = h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'New link for ' + l.name }, 'New link');
+      mintBtn.addEventListener('click', function () { mintLink(l, mintBtn, statusEl); });
+      btns.push(mintBtn);
+      if (l.hasLink && !l.isYou) {
+        var offBtn = h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'Turn off the link for ' + l.name }, 'Turn off link');
+        offBtn.addEventListener('click', function () { revokeLink(l, offBtn, statusEl); });
+        btns.push(offBtn);
+      }
+    }
     return h(
       'li',
       { class: 'card' },
+      h('div', { class: 'row' }, h('span', { class: 'name' }, l.name, l.isYou ? h('span', { class: 'muted' }, ' (you)') : null)),
       h(
         'div',
-        { class: 'row' },
-        h('span', { class: 'name' }, link.name),
-        h(
-          'div',
-          { class: 'btns' },
-          h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'Copy link for ' + link.name, onclick: function () {
-            copyText(link.url).then(function (ok) {
-              label.textContent = ok ? 'Copied' : 'Hold to copy';
-              setTimeout(function () { label.textContent = 'Copy'; }, 2000);
-            });
-          } }, label),
-          h('a', { class: 'btn small-btn primary', href: mailtoFor(link), 'aria-label': 'Email link to ' + link.name }, 'Email')
-        )
-      )
+        { class: 'meta' },
+        h('span', { class: 'chip' + (l.notificationsOn ? ' good' : '') }, l.notificationsOn ? 'notifications on' : 'notifications off'),
+        l.hasLink ? null : h('span', { class: 'chip' }, 'no working link')
+      ),
+      h('p', { class: 'muted small' }, lastSeenWords(l.lastSeenAt)),
+      minted ? mintedPanel(l, minted) : null,
+      btns.length ? h('div', { class: 'btns' }, btns) : h('p', { class: 'muted small' }, 'Only the owner can change this link.'),
+      statusEl
     );
   }
 
@@ -1010,7 +1217,12 @@
   /* ---------------------------------------------------------------- boot */
 
   function start() {
-    token = getToken();
+    if (mock) token = 'mock-token';
+    else {
+      pathToken = getPathToken();
+      storedToken = store('get', TOKEN_KEY);
+      token = pathToken || storedToken;
+    }
     setUpServiceWorker();
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible' && S.me && S.view === 'main' && Date.now() - S.loadedAt > 60000) load(true);

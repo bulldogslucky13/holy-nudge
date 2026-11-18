@@ -3,8 +3,10 @@ import type { NewSubscription } from '../db';
 import { base64urlDecode } from './base64url';
 
 /** Push services we will POST to. Anything else is rejected (no arbitrary outbound requests). */
+const PUSH_HOSTS_EXACT = [
+  'fcm.googleapis.com', // Chrome, Edge on Android, most Chromium (exactly this host, not all of googleapis.com)
+];
 const PUSH_HOST_SUFFIXES = [
-  '.googleapis.com', // Chrome, Edge on Android, most Chromium
   '.push.services.mozilla.com', // Firefox
   '.push.apple.com', // Safari / iOS Home Screen apps
   '.notify.windows.com', // Edge on Windows
@@ -18,7 +20,9 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
     return false;
   }
   if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
-  const host = `.${u.hostname.toLowerCase()}`;
+  const hostname = u.hostname.toLowerCase();
+  if (PUSH_HOSTS_EXACT.includes(hostname)) return true;
+  const host = `.${hostname}`;
   return PUSH_HOST_SUFFIXES.some((s) => host.endsWith(s));
 }
 

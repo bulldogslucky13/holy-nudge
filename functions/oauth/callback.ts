@@ -15,8 +15,8 @@ export const onRequestGet: PagesFunction<OAuthEnvInput> = async ({ request, env 
     return htmlPage(200, 'Holy Nudge OAuth callback is ready', 'Holy Nudge OAuth callback is ready.');
   }
 
-  const missing = missingSettings(env, ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET']);
-  if (missing.length > 0 || !env.CHMS_CLIENT_ID || !env.CHMS_CLIENT_SECRET) {
+  const missing = missingSettings(env, ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET', 'TOKEN_ENC_KEY']);
+  if (missing.length > 0 || !env.CHMS_CLIENT_ID || !env.CHMS_CLIENT_SECRET || !env.TOKEN_ENC_KEY) {
     console.warn(`oauth callback: not configured (${missing.join(', ')} missing)`);
     return htmlPage(503, 'Not set up yet', 'Holy Nudge\'s Pushpay credentials are not configured yet. Nothing was changed.');
   }
@@ -49,7 +49,7 @@ export const onRequestGet: PagesFunction<OAuthEnvInput> = async ({ request, env 
   }
 
   try {
-    await saveAuthorizedTokens(env.DB, tokens, Date.now());
+    await saveAuthorizedTokens(env.DB, { TOKEN_ENC_KEY: env.TOKEN_ENC_KEY }, tokens, Date.now());
   } catch {
     console.error('oauth callback: tokens were issued but could not be saved');
     return htmlPage(500, FAILED, 'Pushpay approved Holy Nudge, but saving the connection failed. Ask the Holy Nudge owner to try again.');

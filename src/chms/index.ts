@@ -19,13 +19,17 @@ export function createDataSource(config: HolyNudgeConfig, env: Env, now: Date): 
     case 'fixture':
       return createFixtureSource(now, config.timeZone);
     case 'pushpay': {
-      const missing = missingSettings(env, ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET']);
-      if (missing.length > 0 || !env.CHMS_CLIENT_ID || !env.CHMS_CLIENT_SECRET) throw new ChmsNotConfiguredError(missing);
+      // A missing or malformed TOKEN_ENC_KEY is "not configured", exactly like missing credentials.
+      const missing = missingSettings(env, ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET', 'TOKEN_ENC_KEY']);
+      if (missing.length > 0 || !env.CHMS_CLIENT_ID || !env.CHMS_CLIENT_SECRET || !env.TOKEN_ENC_KEY) {
+        throw new ChmsNotConfiguredError(missing);
+      }
       return createPushpayDataSource({
         DB: env.DB,
         CHMS_CLIENT_ID: env.CHMS_CLIENT_ID,
         CHMS_CLIENT_SECRET: env.CHMS_CLIENT_SECRET,
         CHMS_API_HOST: env.CHMS_API_HOST,
+        TOKEN_ENC_KEY: env.TOKEN_ENC_KEY,
       });
     }
     default: {

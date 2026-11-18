@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { onRequestGet as start } from '../functions/oauth/start';
 import { onRequestGet as callback } from '../functions/oauth/callback';
 import { constantTimeEqual, REDIRECT_URI, SCOPES, STATE_TTL_MS, type OAuthEnvInput } from '../src/chms/oauth';
+import { importTokenKey, openToken } from '../src/chms/tokenbox';
+import { TEST_TOKEN_KEY } from './helpers';
 import { createTestD1, type TestD1 } from './sqlite-d1';
 
 let t: TestD1;
@@ -20,6 +22,7 @@ beforeEach(async () => {
     CHMS_CLIENT_ID: 'client-id-x',
     CHMS_CLIENT_SECRET: 'client-secret-x',
     OAUTH_SETUP_KEY: 'setup-key-0123456789',
+    TOKEN_ENC_KEY: TEST_TOKEN_KEY,
   };
   tokenCalls = [];
   tokenReply = () =>
@@ -78,7 +81,7 @@ describe('/oauth/start', () => {
   });
 
   it('shows a plain "not configured yet" page while credentials are missing, with or without a key', async () => {
-    for (const missing of ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET', 'OAUTH_SETUP_KEY'] as const) {
+    for (const missing of ['CHMS_CLIENT_ID', 'CHMS_CLIENT_SECRET', 'OAUTH_SETUP_KEY', 'TOKEN_ENC_KEY'] as const) {
       const saved = env[missing];
       delete env[missing];
       for (const q of ['', '?key=setup-key-0123456789']) {
@@ -142,12 +145,41 @@ describe('/oauth/callback', () => {
       client_id: 'client-id-x',
       client_secret: 'client-secret-x',
     });
-    expect(tokens()).toMatchObject({ refresh_token: 'refresh-secret-1', access_token: 'access-secret-1', scope: 'read:individuals' });
+    // Stored encrypted under TOKEN_ENC_KEY, never as plaintext.
+    expect(JSON.stringify(tokens())).not.toMatch(/secret/);
+    expect(tokens()).toMatchObject({ refresh_token: expect.stringMatching(/^v1\./), scope: 'read:individuals' });
+    const key = await importTokenKey(TEST_TOKEN_KEY);
+    expect(await openToken(key, 'refresh_token', tokens().refresh_token as string)).toBe('refresh-secret-1');
+    expect(await openToken(key, 'access_token', tokens().access_token as string)).toBe('access-secret-1');
 
     // The state is single use.
     const replay = await call(callback, `${HOST}/oauth/callback?code=the-code&state=${state}`);
     expect(replay.status).toBe(400);
     expect(tokenCalls).toHaveLength(1);
+  });
+
+  it('refuses to store tokens without a valid TOKEN_ENC_KEY (never plaintext), without calling Pushpay', async () => {
+    const state = await startFlow();
+    for (const bad of [undefined, 'too-short']) {
+      env.TOKEN_ENC_KEY = bad;
+      const res = await call(callback, `${HOST}/oauth/callback?code=the-code&state=${state}`);
+      expect(res.status).toBe(503);
+      expect(await res.text()).toContain('not configured yet');
+    }
+    expect(tokenCalls).toHaveLength(0);
+    expect(tokens().refresh_token).toBeNull();
+  });
+
+  it('sends security headers, allowing only its own inline style by hash', async () => {
+    const res = await call(callback, `${HOST}/oauth/callback`);
+    const csp = res.headers.get('Content-Security-Policy')!;
+    expect(csp).toMatch(/default-src 'self'/);
+    expect(csp).toMatch(/style-src 'sha256-[A-Za-z0-9+/]+=*'/);
+    expect(csp).not.toMatch(/unsafe-inline/);
+    expect(res.headers.get('X-Frame-Options')).toBe('DENY');
+    expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(res.headers.get('Strict-Transport-Security')).toBe('max-age=31536000');
   });
 
   it('rejects unknown, missing and expired state without calling Pushpay', async () => {

@@ -1,9 +1,11 @@
 // holy-nudge-cron: runs the daily job on a schedule, plus a guarded manual trigger.
+// Logs carry counts, stage, reason and error class names only: an uncaught exception would make the
+// runtime log its message (which can echo ChMS values), so every path here catches and logs a fixed line.
 import { createDataSource } from '../src/chms/index';
 import { loadConfig } from '../src/core/config';
 import { createD1Store } from '../src/db';
 import { DEFAULT_APP_BASE_URL, type Env } from '../src/env';
-import { localHour, runDailyJob, type JobOutcome } from '../src/job/daily';
+import { describeFailure, localHour, runDailyJob, type JobOutcome } from '../src/job/daily';
 import { senderFromEnv } from '../src/push/sender';
 
 async function run(env: Env, now: Date, force: boolean): Promise<JobOutcome> {
@@ -32,8 +34,17 @@ async function keyMatches(given: string, expected: string): Promise<boolean> {
 
 export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    const out = await run(env, new Date(controller.scheduledTime), false);
-    console.log('holy-nudge job', JSON.stringify(out));
+    let out: JobOutcome;
+    try {
+      out = await run(env, new Date(controller.scheduledTime), false);
+    } catch (err) {
+      // runDailyJob already recorded the failed run and alerted the owner. Log one fixed line and
+      // throw a sanitized error so the invocation still shows as failed in Cron Events.
+      const line = describeFailure(err);
+      console.error(line);
+      throw new Error(line);
+    }
+    console.log('holy-nudge job', JSON.stringify(out)); // counts only
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -46,7 +57,7 @@ export default {
       const out = await run(env, new Date(), true);
       return Response.json(out);
     } catch (err) {
-      console.error('holy-nudge manual run failed', err instanceof Error ? err.message : 'unknown');
+      console.error(describeFailure(err));
       return Response.json({ error: 'job_failed' }, { status: 500 });
     }
   },

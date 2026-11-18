@@ -14,7 +14,11 @@
     "deploy": "wrangler pages deploy --branch master",
     "deploy:cron": "wrangler deploy -c cron-worker/wrangler.toml",
     "gen-vapid": "node scripts/gen-vapid.mjs",
-    "add-leader": "node scripts/add-leader.mjs"
+    "add-leader": "node scripts/add-leader.mjs",
+    "gen-token-key": "node scripts/gen-token-key.mjs",
+    "revoke-leader": "node scripts/revoke-leader.mjs",
+    "list-leaders": "node scripts/list-leaders.mjs",
+    "hash-tokens": "node scripts/hash-tokens.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261117.1",

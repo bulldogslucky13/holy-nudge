@@ -29,6 +29,8 @@ export async function createTestD1(...migrationPaths: string[]): Promise<TestD1>
     readFileSync: (p: string, enc: 'utf8') => string;
   };
   const sqlite = new DatabaseSync(':memory:');
+  // Like D1, which always enforces foreign keys (matters for migration 0003's table rebuild).
+  sqlite.exec('PRAGMA foreign_keys = ON');
   for (const p of migrationPaths) sqlite.exec(readFileSync(p, 'utf8')); // relative to the project root (vitest cwd)
 
   const state: TestD1 = { db: null as unknown as D1Database, sqlite, failWhen: null, failAfterWhen: null };

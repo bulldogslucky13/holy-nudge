@@ -9,11 +9,14 @@ import {
   TokenRefreshError,
   type TokenOptions,
 } from '../src/chms/tokens';
+import { ChmsNotConfiguredError } from '../src/chms/oauth';
+import { importTokenKey, openToken, sealToken, TokenDecryptError, type TokenColumn } from '../src/chms/tokenbox';
+import { TEST_TOKEN_KEY } from './helpers';
 import { createTestD1, type TestD1 } from './sqlite-d1';
 
 const NOW = Date.UTC(2026, 10, 17, 14, 0, 0);
 const MIN = 60_000;
-const env = { CHMS_CLIENT_ID: 'client-id-x', CHMS_CLIENT_SECRET: 'client-secret-x', CHMS_API_HOST: 'https://api.test' };
+const env = { CHMS_CLIENT_ID: 'client-id-x', CHMS_CLIENT_SECRET: 'client-secret-x', CHMS_API_HOST: 'https://api.test', TOKEN_ENC_KEY: TEST_TOKEN_KEY };
 
 /** Fake Pushpay token endpoint with real single-use rotation semantics. */
 function tokenServer() {
@@ -51,6 +54,9 @@ let t: TestD1;
 let server: ReturnType<typeof tokenServer>;
 let clockMs: number;
 let logs: string[];
+let key: CryptoKey;
+
+const enc = (col: TokenColumn, v: unknown) => (typeof v === 'string' ? sealToken(key, col, v) : Promise.resolve(v));
 
 function opts(extra: Partial<TokenOptions> = {}): TokenOptions {
   return {
@@ -75,6 +81,8 @@ async function seed(over: Record<string, unknown> = {}) {
     needs_reauth_at: null,
     ...over,
   };
+  row.refresh_token = (await enc('refresh_token', row.refresh_token)) as string;
+  row.access_token = (await enc('access_token', row.access_token)) as string;
   await t.db
     .prepare(
       'UPDATE oauth_tokens SET refresh_token = ?, access_token = ?, access_expires_at = ?, lock_owner = ?, lock_expires_at = ?, needs_reauth_at = ?, updated_at = 1 WHERE id = 1',
@@ -83,13 +91,21 @@ async function seed(over: Record<string, unknown> = {}) {
     .run();
 }
 
-const row = () => t.sqlite.prepare('SELECT * FROM oauth_tokens WHERE id = 1').get() as Record<string, unknown>;
+/** The stored row as-is (token columns are ciphertext). */
+const rawRow = () => t.sqlite.prepare('SELECT * FROM oauth_tokens WHERE id = 1').get() as Record<string, unknown>;
+/** The stored row with both token columns decrypted. */
+async function row(): Promise<Record<string, unknown>> {
+  const r = rawRow();
+  const dec = (col: TokenColumn) => (typeof r[col] === 'string' ? openToken(key, col, r[col] as string) : Promise.resolve(r[col]));
+  return { ...r, refresh_token: await dec('refresh_token'), access_token: await dec('access_token') };
+}
 
 beforeEach(async () => {
   t = await createTestD1('migrations/0002_oauth.sql');
   server = tokenServer();
   clockMs = NOW;
   logs = [];
+  key = await importTokenKey(TEST_TOKEN_KEY);
 });
 
 describe('getAccessToken', () => {
@@ -107,7 +123,7 @@ describe('getAccessToken', () => {
     expect(sent.get('client_secret')).toBe('client-secret-x');
     expect(sent.has('subdomain')).toBe(false);
     expect(sent.has('scope')).toBe(false);
-    expect(row()).toMatchObject({
+    expect(await row()).toMatchObject({
       refresh_token: 'refresh-secret-1',
       access_token: 'access-secret-1',
       access_expires_at: clockMs + 7200 * 1000,
@@ -126,8 +142,8 @@ describe('getAccessToken', () => {
     expect(writes).toHaveLength(1);
     expect(writes[0]).toMatch(/access_token = \?/);
     // By the time the caller has the token, D1 already holds the matching refresh token.
-    expect(row().access_token).toBe(token);
-    expect(row().refresh_token).toBe(server.current);
+    expect((await row()).access_token).toBe(token);
+    expect((await row()).refresh_token).toBe(server.current);
   });
 
   it('never refreshes twice when two jobs race: the loser waits and re-reads', async () => {
@@ -137,15 +153,16 @@ describe('getAccessToken', () => {
     const a = getAccessToken(t.db, env, NOW, opts({ ownerId: 'job-a' }));
     const b = getAccessToken(t.db, env, NOW, opts({ ownerId: 'job-b' }));
     await new Promise((r) => setTimeout(r, 5));
-    expect(row().lock_owner).toBe('job-a');
+    expect((await row()).lock_owner).toBe('job-a');
     open();
     expect(await Promise.all([a, b])).toEqual(['access-secret-1', 'access-secret-1']);
     expect(server.calls).toHaveLength(1);
-    expect(row().lock_owner).toBeNull();
+    expect((await row()).lock_owner).toBeNull();
   });
 
   it('takes the lock with one conditional UPDATE and backs off when it is held', async () => {
     await seed({ access_expires_at: NOW - 1, lock_owner: 'other-job', lock_expires_at: NOW + 30_000 });
+    const [r9, a9] = [await enc('refresh_token', 'refresh-secret-9'), await enc('access_token', 'access-secret-9')];
     let sleeps = 0;
     const token = await getAccessToken(
       t.db,
@@ -158,9 +175,9 @@ describe('getAccessToken', () => {
           if (++sleeps === 1) {
             t.sqlite
               .prepare(
-                "UPDATE oauth_tokens SET refresh_token = 'refresh-secret-9', access_token = 'access-secret-9', access_expires_at = ?, lock_owner = NULL, lock_expires_at = NULL",
+                'UPDATE oauth_tokens SET refresh_token = ?, access_token = ?, access_expires_at = ?, lock_owner = NULL, lock_expires_at = NULL',
               )
-              .run(NOW + 120 * MIN);
+              .run(r9 as string, a9 as string, NOW + 120 * MIN);
           }
         },
       }),
@@ -176,7 +193,7 @@ describe('getAccessToken', () => {
     expect(server.calls).toHaveLength(1);
     expect(clockMs).toBeGreaterThan(NOW + 20_000); // waited for the lease to run out
     expect(clockMs).toBeLessThan(NOW + LOCK_TTL_MS);
-    expect(row().lock_owner).toBeNull();
+    expect((await row()).lock_owner).toBeNull();
   });
 
   it('raises ReauthorizationRequired on invalid_grant, flags the row, and stops calling Pushpay', async () => {
@@ -184,9 +201,9 @@ describe('getAccessToken', () => {
     const err = await getAccessToken(t.db, env, NOW, opts()).catch((e) => e);
     expect(err).toBeInstanceOf(ReauthorizationRequired);
     expect(err.reason).toBe('invalid_grant');
-    expect(row().needs_reauth_at).toBe(NOW);
-    expect(row().refresh_token).toBe('refresh-secret-revoked'); // flagged, not deleted
-    expect(row().lock_owner).toBeNull();
+    expect((await row()).needs_reauth_at).toBe(NOW);
+    expect((await row()).refresh_token).toBe('refresh-secret-revoked'); // flagged, not deleted
+    expect((await row()).lock_owner).toBeNull();
 
     await expect(getAccessToken(t.db, env, NOW, opts())).rejects.toBeInstanceOf(ReauthorizationRequired);
     expect(server.calls).toHaveLength(1);
@@ -194,18 +211,17 @@ describe('getAccessToken', () => {
 
   it('does not treat invalid_grant as fatal when the stored token changed meanwhile (late holder or re-approval)', async () => {
     await seed({ access_expires_at: NOW - 1 });
+    const [r7, a7] = [await enc('refresh_token', 'refresh-secret-7'), await enc('access_token', 'access-secret-7')];
     server.override = () => {
       server.override = null;
       // Someone else stored a fresh pair while our request was in flight.
       t.sqlite
-        .prepare(
-          "UPDATE oauth_tokens SET refresh_token = 'refresh-secret-7', access_token = 'access-secret-7', access_expires_at = ?",
-        )
-        .run(NOW + 120 * MIN);
+        .prepare('UPDATE oauth_tokens SET refresh_token = ?, access_token = ?, access_expires_at = ?')
+        .run(r7 as string, a7 as string, NOW + 120 * MIN);
       return Response.json({ error: 'invalid_grant' }, { status: 401 });
     };
     expect(await getAccessToken(t.db, env, NOW, opts())).toBe('access-secret-7');
-    expect(row().needs_reauth_at).toBeNull();
+    expect((await row()).needs_reauth_at).toBeNull();
   });
 
   it('says not_connected before the first approval', async () => {
@@ -219,7 +235,7 @@ describe('getAccessToken', () => {
     await seed({ access_expires_at: NOW - 1 });
     server.override = () => new Response('oops', { status: 503 });
     await expect(getAccessToken(t.db, env, NOW, opts())).rejects.toBeInstanceOf(TokenRefreshError);
-    expect(row()).toMatchObject({ refresh_token: 'refresh-secret-0', lock_owner: null, needs_reauth_at: null });
+    expect(await row()).toMatchObject({ refresh_token: 'refresh-secret-0', lock_owner: null, needs_reauth_at: null });
   });
 
   it('retries the D1 write when it fails after a successful refresh', async () => {
@@ -227,7 +243,7 @@ describe('getAccessToken', () => {
     let failures = 0;
     t.failWhen = (sql) => (/SET refresh_token = \?/.test(sql) && failures++ < 2 ? new Error('D1_ERROR: busy') : null);
     expect(await getAccessToken(t.db, env, NOW, opts())).toBe('access-secret-1');
-    expect(row().refresh_token).toBe('refresh-secret-1');
+    expect((await row()).refresh_token).toBe('refresh-secret-1');
     expect(failures).toBe(3);
   });
 
@@ -242,7 +258,7 @@ describe('getAccessToken', () => {
       return null;
     };
     expect(await getAccessToken(t.db, env, NOW, opts())).toBe('access-secret-1');
-    expect(row().refresh_token).toBe('refresh-secret-1');
+    expect((await row()).refresh_token).toBe('refresh-secret-1');
   });
 
   it('fails loudly, without secrets and without returning the token, when D1 never takes the write', async () => {
@@ -281,10 +297,11 @@ describe('saveAuthorizedTokens', () => {
     await seed({ needs_reauth_at: NOW - 5, lock_owner: 'x', lock_expires_at: NOW + 1000 });
     await saveAuthorizedTokens(
       t.db,
+      { TOKEN_ENC_KEY: TEST_TOKEN_KEY },
       { access_token: 'access-secret-new', refresh_token: 'refresh-secret-new', expires_in: 7200, scope: 'a b' },
       NOW,
     );
-    expect(row()).toMatchObject({
+    expect(await row()).toMatchObject({
       refresh_token: 'refresh-secret-new',
       access_token: 'access-secret-new',
       access_expires_at: NOW + 7_200_000,
@@ -292,5 +309,60 @@ describe('saveAuthorizedTokens', () => {
       needs_reauth_at: null,
       lock_owner: null,
     });
+  });
+});
+
+describe('encryption at rest (TOKEN_ENC_KEY)', () => {
+  it('round-trips, uses a fresh IV per write, and binds the column', async () => {
+    const a = await sealToken(key, 'refresh_token', 'refresh-secret-x');
+    const b = await sealToken(key, 'refresh_token', 'refresh-secret-x');
+    expect(a).toMatch(/^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+$/);
+    expect(a).not.toBe(b);
+    expect(await openToken(key, 'refresh_token', a)).toBe('refresh-secret-x');
+    await expect(openToken(key, 'access_token', a)).rejects.toBeInstanceOf(TokenDecryptError);
+    const other = await importTokenKey(Buffer.alloc(32, 9).toString('base64url'));
+    await expect(openToken(other, 'refresh_token', a)).rejects.toBeInstanceOf(TokenDecryptError);
+    await expect(openToken(key, 'refresh_token', 'refresh-secret-x')).rejects.toBeInstanceOf(TokenDecryptError);
+  });
+
+  it('stores ciphertext, never the plaintext, after a refresh and after approval', async () => {
+    await seed({ access_expires_at: NOW - 1 });
+    await getAccessToken(t.db, env, NOW, opts());
+    let raw = JSON.stringify(rawRow());
+    expect(raw).not.toMatch(/secret/);
+    expect(rawRow().refresh_token).toMatch(/^v1\./);
+    expect(rawRow().access_token).toMatch(/^v1\./);
+    await saveAuthorizedTokens(t.db, env, { access_token: 'access-secret-n', refresh_token: 'refresh-secret-n', expires_in: 7200, scope: undefined }, NOW);
+    raw = JSON.stringify(rawRow());
+    expect(raw).not.toMatch(/secret/);
+    expect(await row()).toMatchObject({ refresh_token: 'refresh-secret-n', access_token: 'access-secret-n' });
+  });
+
+  it('refuses to work without a valid key: not configured, nothing read or sent', async () => {
+    await seed({ access_expires_at: NOW - 1 });
+    for (const bad of [undefined, '', 'not-a-key', Buffer.alloc(16, 1).toString('base64url')]) {
+      const e = { ...env, TOKEN_ENC_KEY: bad as unknown as string };
+      await expect(getAccessToken(t.db, e, NOW, opts())).rejects.toBeInstanceOf(ChmsNotConfiguredError);
+      await expect(
+        saveAuthorizedTokens(t.db, e, { access_token: 'a', refresh_token: 'r', expires_in: 1, scope: undefined }, NOW),
+      ).rejects.toBeInstanceOf(ChmsNotConfiguredError);
+    }
+    expect(server.calls).toHaveLength(0);
+  });
+
+  it('a wrong key (or a plaintext value) means re-approval, without calling Pushpay or flagging the row', async () => {
+    await seed({ access_expires_at: NOW - 1 });
+    const wrong = { ...env, TOKEN_ENC_KEY: Buffer.alloc(32, 9).toString('base64url') };
+    const err = await getAccessToken(t.db, wrong, NOW, opts()).catch((e) => e);
+    expect(err).toBeInstanceOf(ReauthorizationRequired);
+    expect(err.reason).toBe('undecryptable');
+    expect(server.calls).toHaveLength(0);
+    expect(rawRow()).toMatchObject({ needs_reauth_at: null, lock_owner: null });
+    expect(logs.join('\n')).not.toMatch(/secret|v1\./);
+
+    t.sqlite.prepare("UPDATE oauth_tokens SET refresh_token = 'refresh-secret-0', access_token = 'access-secret-0'").run();
+    const plain = await getAccessToken(t.db, env, NOW, opts()).catch((e) => e);
+    expect(plain).toBeInstanceOf(ReauthorizationRequired);
+    expect(server.calls).toHaveLength(0);
   });
 });

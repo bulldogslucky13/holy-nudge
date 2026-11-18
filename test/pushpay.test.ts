@@ -12,6 +12,8 @@ import {
   type PushpayOptions,
 } from '../src/chms/pushpay';
 import { dueToDate } from '../src/core/time';
+import { importTokenKey, sealToken } from '../src/chms/tokenbox';
+import { TEST_TOKEN_KEY } from './helpers';
 import { createTestD1 } from './sqlite-d1';
 
 const TZ = 'America/Chicago';
@@ -438,11 +440,12 @@ describe('completenessMismatches', () => {
 describe('createPushpayDataSource', () => {
   it('reads the access token from D1 and calls the configured API host', async () => {
     const t = await createTestD1('migrations/0002_oauth.sql');
+    const key = await importTokenKey(TEST_TOKEN_KEY);
     t.sqlite
-      .prepare("UPDATE oauth_tokens SET refresh_token = 'r', access_token = 'access-from-d1', access_expires_at = ?")
-      .run(Date.now() + 3600_000);
+      .prepare('UPDATE oauth_tokens SET refresh_token = ?, access_token = ?, access_expires_at = ?')
+      .run(await sealToken(key, 'refresh_token', 'r'), await sealToken(key, 'access_token', 'access-from-d1'), Date.now() + 3600_000);
     const ds = createPushpayDataSource(
-      { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', CHMS_API_HOST: 'https://api-beta.ccbchurch.com/' },
+      { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', CHMS_API_HOST: 'https://api-beta.ccbchurch.com/', TOKEN_ENC_KEY: TEST_TOKEN_KEY },
       { fetch: fakeFetch, sleep: async () => {}, log: () => {} },
     );
     await ds.listQueues('37');

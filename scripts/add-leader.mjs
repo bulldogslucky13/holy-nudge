@@ -1,69 +1,66 @@
 #!/usr/bin/env node
-// Add (or update) a leader row and print their personal link.
-// Usage: node scripts/add-leader.mjs --name "Sam Fakename" [--chms-id L101] [--admin] [--owner]
-//        [--local | --remote] [--base-url https://holynudge.cameronbristol.xyz]
-import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+// Add (or update) a leader row. A new row gets a personal link, printed ONCE: only its SHA-256 is stored,
+// so it cannot be shown again. Re-running for an existing person updates the name and raises flags but
+// keeps their current link, unless you pass --new-link (which replaces it; the old link stops working).
+// Usage: node scripts/add-leader.mjs --name "Sam Fakename" [--chms-id L101] [--admin] [--owner] [--new-link]
+//        (--local | --remote) [--base-url https://holynudge.cameronbristol.xyz]
+//   --admin  staff: sees every queue and can make or turn off anyone's link (except the owner's)
+//   --owner  gets failure alerts; only an owner can change an owner's link
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { d1, die, LOCAL_BASE_URL, newToken, PROD_BASE_URL, q, root, target } from './lib/d1.mjs';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const S = 'add-leader';
 const { values: a } = parseArgs({
   options: {
     name: { type: 'string' },
     'chms-id': { type: 'string' },
     admin: { type: 'boolean', default: false },
     owner: { type: 'boolean', default: false },
+    'new-link': { type: 'boolean', default: false },
     local: { type: 'boolean', default: false },
     remote: { type: 'boolean', default: false },
     'base-url': { type: 'string' },
   },
 });
 
-function die(msg) {
-  console.error(`add-leader: ${msg}`);
-  process.exit(1);
-}
-
-if (!a.name) die('--name is required');
-if (a.local === a.remote) die('pass exactly one of --local or --remote');
+if (!a.name) die(S, '--name is required');
+const where = target(S, a);
 const chmsId = a['chms-id'] ?? null;
-const baseUrl = (a['base-url'] ?? (a.local ? 'http://localhost:8788' : 'https://holynudge.cameronbristol.xyz')).replace(/\/+$/, '');
+const baseUrl = (a['base-url'] ?? (a.local ? LOCAL_BASE_URL : PROD_BASE_URL)).replace(/\/+$/, '');
 
 const config = JSON.parse(readFileSync(join(root, 'config/holy-nudge.config.json'), 'utf8'));
 if (config.dataSource === 'fixture') {
   const fakeIds = JSON.parse(readFileSync(join(root, 'fixtures/people.json'), 'utf8')).map((p) => p.id);
   if (!chmsId || !fakeIds.includes(chmsId)) {
-    die(`dataSource is "fixture": --chms-id must be one of the sample leaders so they see sample data: ${fakeIds.join(', ')}`);
+    die(S, `dataSource is "fixture": --chms-id must be one of the sample leaders so they see sample data: ${fakeIds.join(', ')}`);
   }
 }
 
-const q = (v) => (v === null ? 'NULL' : `'${String(v).replaceAll("'", "''")}'`);
-const token = randomBytes(32).toString('base64url');
 const admin = a.admin ? 1 : 0;
 const owner = a.owner ? 1 : 0;
+const flags = `${a.admin ? ' [admin]' : ''}${a.owner ? ' [owner]' : ''}`;
 
-// Re-running for an existing ChMS id keeps their token (and link) and only raises flags.
-const insert = chmsId
-  ? `INSERT INTO leaders (chms_individual_id, name, token, is_admin, is_owner) VALUES (${q(chmsId)}, ${q(a.name)}, ${q(token)}, ${admin}, ${owner})
-     ON CONFLICT(chms_individual_id) DO UPDATE SET name = excluded.name,
-       is_admin = max(leaders.is_admin, excluded.is_admin), is_owner = max(leaders.is_owner, excluded.is_owner);`
-  : `INSERT INTO leaders (name, token, is_admin, is_owner) VALUES (${q(a.name)}, ${q(token)}, ${admin}, ${owner});`;
-const select = chmsId
-  ? `SELECT token FROM leaders WHERE chms_individual_id = ${q(chmsId)};`
-  : `SELECT token FROM leaders WHERE token = ${q(token)};`;
-
-function d1(sql) {
-  const args = ['wrangler', 'd1', 'execute', 'holy-nudge', a.local ? '--local' : '--remote', '--json', '--command', sql];
-  const r = spawnSync('npx', args, { cwd: root, encoding: 'utf8' });
-  if (r.status !== 0) die(`wrangler d1 execute failed:\n${r.stderr || r.stdout}`);
-  return JSON.parse(r.stdout);
+let existing = null;
+if (chmsId) {
+  const [rows] = d1(S, where, `SELECT id, (revoked_at IS NULL AND (token_hash IS NOT NULL OR token IS NOT NULL)) AS has_link FROM leaders WHERE chms_individual_id = ${q(chmsId)};`);
+  existing = rows[0] ?? null;
 }
 
-d1(insert);
-const rows = d1(select)[0]?.results ?? [];
-if (!rows[0]?.token) die('could not read the token back');
-console.log(`${a.name}${chmsId ? ` (${chmsId})` : ''}${a.admin ? ' [admin]' : ''}${a.owner ? ' [owner]' : ''}`);
-console.log(`Personal link: ${baseUrl}/l/${rows[0].token}`);
+if (existing) {
+  d1(S, where, `UPDATE leaders SET name = ${q(a.name)}, is_admin = max(is_admin, ${admin}), is_owner = max(is_owner, ${owner}) WHERE id = ${existing.id};`);
+  if (existing.has_link && !a['new-link']) {
+    console.log(`${a.name} (${chmsId})${flags}: updated. Their current link still works (pass --new-link to replace it).`);
+    process.exit(0);
+  }
+  const { token, hash } = newToken();
+  d1(S, where, `UPDATE leaders SET token_hash = ${q(hash)}, token = NULL, revoked_at = NULL WHERE id = ${existing.id};`);
+  console.log(`${a.name} (${chmsId})${flags}: new link${existing.has_link ? ' (the old one no longer works)' : ''}.`);
+  console.log(`Personal link (shown once, send it now): ${baseUrl}/l/${token}`);
+} else {
+  const { token, hash } = newToken();
+  d1(S, where, `INSERT INTO leaders (chms_individual_id, name, token_hash, is_admin, is_owner) VALUES (${q(chmsId)}, ${q(a.name)}, ${q(hash)}, ${admin}, ${owner});`);
+  console.log(`${a.name}${chmsId ? ` (${chmsId})` : ''}${flags}: added.`);
+  console.log(`Personal link (shown once, send it now): ${baseUrl}/l/${token}`);
+}

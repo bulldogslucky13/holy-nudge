@@ -138,7 +138,8 @@ export function mapDueDate(raw: unknown): string | null {
   if (DATE_ONLY.test(s)) return s;
   const midnight = MIDNIGHT.exec(s);
   if (midnight?.[1]) return midnight[1];
-  if (Number.isNaN(Date.parse(s.replace(' ', 'T')))) throw new ChmsDataError(`Unrecognised due value "${s}"`);
+  // No raw value in the message: error messages must never carry ChMS data.
+  if (Number.isNaN(Date.parse(s.replace(' ', 'T')))) throw new ChmsDataError('Unrecognised due value');
   return s;
 }
 
@@ -186,12 +187,12 @@ export function mapEntry(r: RawEntry): QueueEntry {
     throw new ChmsDataError('Queue individual row without queue_individual_id or queue_id');
   }
   const id = String(r.queue_individual_id);
-  if (!STATUSES.includes(r.status as Status)) throw new ChmsDataError(`Entry ${id}: unknown status "${String(r.status)}"`);
+  if (!STATUSES.includes(r.status as Status)) throw new ChmsDataError('Entry with an unknown status');
   // SANDBOX: `created` is date-only per the PQ guide ("2026-09-15"); passed through unchanged.
   const created = mapOptionalTimestamp(r.created);
-  if (!created) throw new ChmsDataError(`Entry ${id}: missing created date`);
+  if (!created) throw new ChmsDataError('Entry with no created date');
   const individual = mapPerson(r.individual ?? null) ?? mapPerson({ id: r.individual_id ?? null });
-  if (!individual) throw new ChmsDataError(`Entry ${id}: missing individual`);
+  if (!individual) throw new ChmsDataError('Entry with no individual');
   return {
     id,
     queueId: String(r.queue_id),
@@ -445,7 +446,7 @@ export class PushpayDataSource implements DataSource {
           (err: unknown) => {
             // A merged or hidden profile should not sink the whole run: go without its phone.
             if (err instanceof ChmsApiError && (err.status === 403 || err.status === 404)) {
-              this.log(`pushpay: individual ${id} not readable (HTTP ${err.status}); no phone`);
+              this.log(`pushpay: an individual was not readable (HTTP ${err.status}); no phone`);
               return null;
             }
             throw err;
@@ -638,7 +639,7 @@ function explain(status: number): string {
  * which refreshes under the lock when needed.
  */
 export function createPushpayDataSource(
-  env: Pick<OAuthEnv, 'DB' | 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'CHMS_API_HOST'>,
+  env: Pick<OAuthEnv, 'DB' | 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'CHMS_API_HOST' | 'TOKEN_ENC_KEY'>,
   options: Omit<Partial<PushpayOptions>, 'apiHost' | 'accessToken'> = {},
 ): PushpayDataSource {
   return new PushpayDataSource({

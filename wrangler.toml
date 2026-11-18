@@ -1,6 +1,7 @@
 # Cloudflare Pages project "holy-nudge": static PWA from public/ + Pages Functions in functions/.
 # Secrets (npx wrangler pages secret put <NAME> --project-name holy-nudge):
-#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional)
+#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional), OAUTH_SETUP_KEY,
+#   CHMS_CLIENT_ID, CHMS_CLIENT_SECRET, TOKEN_ENC_KEY (same value as the cron worker)
 name = "holy-nudge"
 pages_build_output_dir = "public"
 compatibility_date = "2026-11-17"

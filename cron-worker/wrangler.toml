@@ -1,6 +1,7 @@
 # holy-nudge-cron: the daily job. Deploy with `npm run deploy:cron`.
 # Secrets (wrangler secret put <NAME> -c cron-worker/wrangler.toml):
-#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional), JOB_TRIGGER_KEY
+#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional), JOB_TRIGGER_KEY,
+#   CHMS_CLIENT_ID, CHMS_CLIENT_SECRET, TOKEN_ENC_KEY (same value as the Pages project)
 name = "holy-nudge-cron"
 main = "index.ts"
 compatibility_date = "2026-11-17"

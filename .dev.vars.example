@@ -11,3 +11,8 @@ APP_BASE_URL=
 # Live ChMS connection (OAuth).
 CHMS_CLIENT_ID=
 CHMS_CLIENT_SECRET=
+# Encrypts the Pushpay tokens in D1 (AES-256-GCM). 32 random bytes, base64url: `npm run gen-token-key`.
+# Required when dataSource is "pushpay"; Pages and the cron worker must share the same value.
+TOKEN_ENC_KEY=
+# Pages only: /oauth/start?key=<this>. Remove or rotate it once the Master Admin has approved.
+OAUTH_SETUP_KEY=

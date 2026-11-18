@@ -26,8 +26,16 @@
 //      and invalid_grant only flags (never deletes) the stored token, so a late but valid
 //      write still lands and clears the flag.
 //
+// Encryption at rest (src/chms/tokenbox.ts): both token columns hold AES-256-GCM ciphertext under
+// TOKEN_ENC_KEY. Every value is decrypted only in memory. Each write uses a fresh IV, so the
+// compare-and-swap below compares the STORED ciphertext we read (never re-encrypts to compare), and
+// the rotated pair is encrypted once, before the first write attempt, so retries and the read-back
+// check see the same bytes. Ordering is unchanged: the new refresh token is in D1 before the new
+// access token is returned to anyone.
+//
 // Never log token values.
-import { OAuthTokenError, refreshGrant, type OAuthEnv, type TokenResponse } from './oauth';
+import { ChmsNotConfiguredError, OAuthTokenError, refreshGrant, type OAuthEnv, type TokenResponse } from './oauth';
+import { importTokenKey, isValidTokenKey, openToken, sealToken, TokenDecryptError } from './tokenbox';
 
 /** Refresh when the cached access token has less than this left. */
 export const REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -41,11 +49,13 @@ const MAX_LOCK_WAIT_MS = 2 * LOCK_TTL_MS + 10 * 1000;
 /** The connection is gone; a Master Admin must re-approve. The job turns this into an owner alert. */
 export class ReauthorizationRequired extends Error {
   override name = 'ReauthorizationRequired';
-  constructor(readonly reason: 'not_connected' | 'invalid_grant') {
+  constructor(readonly reason: 'not_connected' | 'invalid_grant' | 'undecryptable') {
     super(
       reason === 'not_connected'
         ? 'Holy Nudge is not connected to Pushpay yet: a Master Admin must approve it via /oauth/start.'
-        : 'Pushpay rejected the refresh token (invalid_grant): a Master Admin must re-approve Holy Nudge via /oauth/start.',
+        : reason === 'invalid_grant'
+          ? 'Pushpay rejected the refresh token (invalid_grant): a Master Admin must re-approve Holy Nudge via /oauth/start.'
+          : 'The stored Pushpay token could not be decrypted: check TOKEN_ENC_KEY is the same on Pages and the cron worker, or have a Master Admin re-approve via /oauth/start.',
     );
   }
 }
@@ -70,7 +80,13 @@ export class TokenLockTimeout extends Error {
   override name = 'TokenLockTimeout';
 }
 
-export type TokenEnv = Pick<OAuthEnv, 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'CHMS_API_HOST'>;
+export type TokenEnv = Pick<OAuthEnv, 'CHMS_CLIENT_ID' | 'CHMS_CLIENT_SECRET' | 'CHMS_API_HOST' | 'TOKEN_ENC_KEY'>;
+
+/** The AES key, or ChmsNotConfiguredError: never fall back to plaintext. */
+async function tokenKey(env: Pick<OAuthEnv, 'TOKEN_ENC_KEY'>): Promise<CryptoKey> {
+  if (!isValidTokenKey(env.TOKEN_ENC_KEY)) throw new ChmsNotConfiguredError(['TOKEN_ENC_KEY']);
+  return importTokenKey(env.TOKEN_ENC_KEY);
+}
 
 export interface TokenOptions {
   fetch?: typeof fetch;
@@ -85,6 +101,7 @@ export interface TokenOptions {
   log?: (message: string) => void;
 }
 
+/** As stored: refresh_token and access_token are ciphertext ("v1...."). */
 interface TokenRow {
   refresh_token: string | null;
   access_token: string | null;
@@ -106,13 +123,24 @@ function readRow(db: D1Database): Promise<TokenRow | null> {
     .first<TokenRow>();
 }
 
-function usable(row: TokenRow | null, now: number, rejected: string | undefined): row is TokenRow & { access_token: string } {
-  return (
-    !!row?.access_token &&
-    row.access_expires_at !== null &&
-    row.access_expires_at - REFRESH_MARGIN_MS > now &&
-    row.access_token !== rejected
-  );
+/** The decrypted access token if it is still good for a while and not the one the API just rejected. */
+async function usableAccess(
+  key: CryptoKey,
+  row: TokenRow | null,
+  now: number,
+  rejected: string | undefined,
+  log: (m: string) => void,
+): Promise<string | null> {
+  if (!row?.access_token || row.access_expires_at === null || row.access_expires_at - REFRESH_MARGIN_MS <= now) return null;
+  let access: string;
+  try {
+    access = await openToken(key, 'access_token', row.access_token);
+  } catch (e) {
+    if (!(e instanceof TokenDecryptError)) throw e;
+    log('oauth: stored access token could not be decrypted; refreshing');
+    return null;
+  }
+  return access === rejected ? null : access;
 }
 
 /**
@@ -130,6 +158,7 @@ export async function getAccessToken(
   const clock = opts.clock ?? (() => start + (Date.now() - realStart));
   const sleep = opts.sleep ?? defaultSleep;
   const log = opts.log ?? ((m: string) => console.error(m));
+  const key = await tokenKey(env);
   const deadline = clock() + MAX_LOCK_WAIT_MS;
   let delay = 250;
 
@@ -137,7 +166,8 @@ export async function getAccessToken(
     if (round >= 50) throw new TokenLockTimeout('Gave up getting a Pushpay access token after repeated retries.');
     const row = await readRow(db);
     const t = clock();
-    if (usable(row, t, opts.rejectedAccessToken)) return row.access_token;
+    const access = await usableAccess(key, row, t, opts.rejectedAccessToken, log);
+    if (access !== null) return access;
     if (!row?.refresh_token) throw new ReauthorizationRequired('not_connected');
     if (row.needs_reauth_at !== null) throw new ReauthorizationRequired('invalid_grant');
 
@@ -151,7 +181,7 @@ export async function getAccessToken(
 
     if (lock.meta.changes === 1) {
       try {
-        const result = await refreshUnderLock(db, env, opts, clock, sleep, log);
+        const result = await refreshUnderLock(db, env, key, opts, clock, sleep, log);
         if (result !== RETRY) return result;
       } finally {
         await db
@@ -173,6 +203,7 @@ export async function getAccessToken(
 async function refreshUnderLock(
   db: D1Database,
   env: TokenEnv,
+  key: CryptoKey,
   opts: TokenOptions,
   clock: () => number,
   sleep: (ms: number) => Promise<void>,
@@ -180,10 +211,21 @@ async function refreshUnderLock(
 ): Promise<string | typeof RETRY> {
   // Re-read under the lock: the previous holder may have refreshed since our first read.
   const row = await readRow(db);
-  if (usable(row, clock(), opts.rejectedAccessToken)) return row.access_token;
+  const access = await usableAccess(key, row, clock(), opts.rejectedAccessToken, log);
+  if (access !== null) return access;
   if (!row?.refresh_token) throw new ReauthorizationRequired('not_connected');
   if (row.needs_reauth_at !== null) throw new ReauthorizationRequired('invalid_grant');
-  const spent = row.refresh_token;
+  /** Ciphertext exactly as stored: the compare-and-swap key for every write below. */
+  const spentStored = row.refresh_token;
+  let spent: string;
+  try {
+    spent = await openToken(key, 'refresh_token', spentStored);
+  } catch (e) {
+    if (!(e instanceof TokenDecryptError)) throw e;
+    // Not flagged: the other worker may hold the right key. Nothing was sent to Pushpay.
+    log('oauth: stored refresh token could not be decrypted (TOKEN_ENC_KEY changed or differs between Pages and the cron worker)');
+    throw new ReauthorizationRequired('undecryptable');
+  }
 
   let tokens: TokenResponse;
   try {
@@ -194,7 +236,7 @@ async function refreshUnderLock(
       // Flag, do not delete: a late holder (window d) may still write a valid rotation.
       const flagged = await db
         .prepare('UPDATE oauth_tokens SET needs_reauth_at = ? WHERE id = 1 AND refresh_token = ?')
-        .bind(clock(), spent)
+        .bind(clock(), spentStored)
         .run();
       if (flagged.meta.changes === 1) {
         log('oauth: refresh returned invalid_grant; Master Admin re-approval required');
@@ -211,14 +253,15 @@ async function refreshUnderLock(
   const next = tokens.refresh_token ?? spent;
   if (!tokens.refresh_token) log('oauth: refresh response had no refresh_token; keeping the stored one');
   const expiresAt = clock() + tokens.expires_in * 1000;
-  const outcome = await persistRotated(db, spent, next, tokens, expiresAt, clock, sleep, log);
+  const outcome = await persistRotated(db, key, spentStored, next, tokens, expiresAt, clock, sleep, log);
   return outcome === 'saved' ? tokens.access_token : RETRY;
 }
 
 /** CAS write of the rotated pair, with retries. Returns 'superseded' if a re-approval replaced the token meanwhile. */
 async function persistRotated(
   db: D1Database,
-  spent: string,
+  key: CryptoKey,
+  spentStored: string,
   next: string,
   tokens: TokenResponse,
   expiresAt: number,
@@ -227,6 +270,17 @@ async function persistRotated(
   log: (m: string) => void,
 ): Promise<'saved' | 'superseded'> {
   let lastErrorName = 'unknown';
+  // Encrypt once, so every attempt (and the read-back below) deals in the same stored bytes.
+  let nextStored: string;
+  let accessStored: string;
+  try {
+    nextStored = await sealToken(key, 'refresh_token', next);
+    accessStored = await sealToken(key, 'access_token', tokens.access_token);
+  } catch (e) {
+    lastErrorName = e instanceof Error ? e.name : typeof e;
+    log(`oauth: encrypting rotated token failed (${lastErrorName})`);
+    throw new TokenPersistError(`Encrypting the rotated Pushpay token failed (${lastErrorName}); have a Master Admin re-approve via /oauth/start.`);
+  }
   for (let attempt = 1; attempt <= PERSIST_ATTEMPTS; attempt++) {
     try {
       const res = await db
@@ -235,13 +289,13 @@ async function persistRotated(
              needs_reauth_at = NULL, lock_owner = NULL, lock_expires_at = NULL
            WHERE id = 1 AND refresh_token = ?`,
         )
-        .bind(next, tokens.access_token, expiresAt, tokens.scope ?? null, clock(), spent)
+        .bind(nextStored, accessStored, expiresAt, tokens.scope ?? null, clock(), spentStored)
         .run();
       if (res.meta.changes === 1) return 'saved';
       // Nothing matched: either an earlier "failed" attempt actually committed, or the
       // token was replaced (re-approval). Tell them apart by reading back.
       const row = await readRow(db);
-      if (row?.refresh_token === next) return 'saved';
+      if (row?.refresh_token === nextStored) return 'saved';
       log('oauth: stored refresh token changed during refresh (re-approval?); using the stored one');
       return 'superseded';
     } catch (e) {
@@ -265,6 +319,7 @@ async function persistRotated(
  */
 export async function saveAuthorizedTokens(
   db: D1Database,
+  env: Pick<OAuthEnv, 'TOKEN_ENC_KEY'>,
   tokens: TokenResponse,
   now: number,
   opts: { sleep?: (ms: number) => Promise<void>; log?: (m: string) => void } = {},
@@ -272,6 +327,9 @@ export async function saveAuthorizedTokens(
   if (!tokens.refresh_token) throw new TokenPersistError('Authorization response had no refresh token.');
   const sleep = opts.sleep ?? defaultSleep;
   const log = opts.log ?? ((m: string) => console.error(m));
+  const key = await tokenKey(env);
+  const refreshStored = await sealToken(key, 'refresh_token', tokens.refresh_token);
+  const accessStored = await sealToken(key, 'access_token', tokens.access_token);
   let lastErrorName = 'unknown';
   for (let attempt = 1; attempt <= PERSIST_ATTEMPTS; attempt++) {
     try {
@@ -284,7 +342,7 @@ export async function saveAuthorizedTokens(
              access_expires_at = excluded.access_expires_at, scope = excluded.scope, updated_at = excluded.updated_at,
              lock_owner = NULL, lock_expires_at = NULL, needs_reauth_at = NULL`,
         )
-        .bind(tokens.refresh_token, tokens.access_token, now + tokens.expires_in * 1000, tokens.scope ?? null, now)
+        .bind(refreshStored, accessStored, now + tokens.expires_in * 1000, tokens.scope ?? null, now)
         .run();
       return;
     } catch (e) {

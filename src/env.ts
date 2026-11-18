@@ -27,6 +27,11 @@ export interface Env {
   CHMS_API_HOST?: string;
   /** Var, optional. Church subdomain for the authorize page. */
   CHMS_SUBDOMAIN?: string;
+  /**
+   * Secret, Pages AND cron worker (same value): 32 random bytes, base64url (`npm run gen-token-key`).
+   * Encrypts the Pushpay tokens in oauth_tokens. Required when dataSource is "pushpay".
+   */
+  TOKEN_ENC_KEY?: string;
 }
 
 export const DEFAULT_APP_BASE_URL = 'https://holynudge.cameronbristol.xyz';

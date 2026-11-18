@@ -1,4 +1,5 @@
 // The PWA manifest, personalised when ?t=<token> is present so the installed app opens /l/<token>.
+import { securityHeaders } from '../src/api/headers';
 import { isTokenShaped } from '../src/api/http';
 import type { Env } from '../src/env';
 
@@ -42,9 +43,9 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   }
   return new Response(JSON.stringify(manifest), {
     headers: {
+      ...securityHeaders(),
       'Content-Type': 'application/manifest+json; charset=utf-8',
       'Cache-Control': personal ? 'private, no-store' : 'public, max-age=300',
-      'Referrer-Policy': 'no-referrer',
     },
   });
 };
