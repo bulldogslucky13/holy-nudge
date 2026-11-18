@@ -111,4 +111,3 @@ Pushpay is replacing Process Queues with Workflows. Once the church migrates, th
 
 - Everything marked `SANDBOX:` in `src/chms/` (token endpoint body format, whether the API returns every assignee's people under the approving admin, paging headers, date formats, phone numbers on queue rows, rate-limit headers). Needs the sandbox credentials.
 - The "Open in ChMS" queue link pattern (`queueUrlTemplate`) is a guess; ask a staff member to paste the URL from their browser while viewing a queue.
-- Install and push on a real iPhone from the Home Screen. Push has been verified end to end in desktop Chrome only.
