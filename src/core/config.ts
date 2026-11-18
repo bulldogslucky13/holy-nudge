@@ -1,5 +1,5 @@
 import raw from '../../config/holy-nudge.config.json';
-import type { DataSourceKind, HolyNudgeConfig } from './types';
+import type { DataSourceKind, HolyNudgeConfig, Status } from './types';
 
 export class ConfigError extends Error {}
 
@@ -11,6 +11,24 @@ export function queueUrl(config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'queueUrl
   return (config.queueUrlTemplate ?? DEFAULT_QUEUE_URL_TEMPLATE)
     .replaceAll('{chmsBaseUrl}', config.chmsBaseUrl)
     .replaceAll('{queueId}', encodeURIComponent(queueId));
+}
+
+/** Web UI status_id values, read from real filtered queue URLs (2026-11-17). IN_PROCESS = 1 is inferred, not seen. */
+const WEB_STATUS_ID: Record<Status, string> = { WAITING: '0', IN_PROCESS: '1', DONE: '2', NOT_STARTED: '3' };
+
+/** Queue page filtered to one status and every assignee, for the admin view. Pattern from real URLs. */
+export const DEFAULT_ADMIN_QUEUE_URL_TEMPLATE =
+  '{chmsBaseUrl}/step_individuals.php?ax=my&search_flag=1&step_id={queueId}&srch%5Bstatus_id%5D={statusId}&srch%5Bassigned%5D=all';
+
+export function adminQueueUrl(
+  config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'adminQueueUrlTemplate'>,
+  queueId: string,
+  status: Status,
+): string {
+  return (config.adminQueueUrlTemplate ?? DEFAULT_ADMIN_QUEUE_URL_TEMPLATE)
+    .replaceAll('{chmsBaseUrl}', config.chmsBaseUrl)
+    .replaceAll('{queueId}', encodeURIComponent(queueId))
+    .replaceAll('{statusId}', WEB_STATUS_ID[status]);
 }
 
 function fail(msg: string): never {
@@ -65,6 +83,13 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     }
     queueUrlTemplate = o.queueUrlTemplate;
   }
+  let adminQueueUrlTemplate: string | undefined;
+  if (o.adminQueueUrlTemplate !== undefined) {
+    if (typeof o.adminQueueUrlTemplate !== 'string' || !o.adminQueueUrlTemplate.includes('{queueId}')) {
+      fail('adminQueueUrlTemplate must be a string containing {queueId}');
+    }
+    adminQueueUrlTemplate = o.adminQueueUrlTemplate;
+  }
 
   return {
     processId: o.processId,
@@ -75,6 +100,7 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     dataSource: o.dataSource as DataSourceKind,
     chmsBaseUrl: o.chmsBaseUrl.replace(/\/+$/, ''),
     ...(queueUrlTemplate !== undefined ? { queueUrlTemplate } : {}),
+    ...(adminQueueUrlTemplate !== undefined ? { adminQueueUrlTemplate } : {}),
   };
 }
 

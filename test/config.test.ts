@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, parseConfig, queueUrl } from '../src/core/config';
+import { ConfigError, loadConfig, parseConfig, queueUrl, adminQueueUrl } from '../src/core/config';
 
 describe('config', () => {
   it('bundled config loads with the spec defaults', () => {
@@ -26,5 +26,14 @@ describe('config', () => {
     const custom = parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q/{queueId}' });
     expect(queueUrl(custom, 'a b')).toBe('https://wildwood.ccbchurch.com/q/a%20b');
     expect(() => parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q' })).toThrow(/queueUrlTemplate/);
+  });
+
+  it('builds admin queue links filtered by status across all assignees', () => {
+    const c = { chmsBaseUrl: 'https://wildwood.ccbchurch.com' };
+    const base = 'https://wildwood.ccbchurch.com/step_individuals.php?ax=my&search_flag=1&step_id=232&srch%5Bstatus_id%5D=';
+    expect(adminQueueUrl(c, '232', 'NOT_STARTED')).toBe(base + '3&srch%5Bassigned%5D=all');
+    expect(adminQueueUrl(c, '232', 'WAITING')).toBe(base + '0&srch%5Bassigned%5D=all');
+    expect(adminQueueUrl(c, '232', 'DONE')).toBe(base + '2&srch%5Bassigned%5D=all');
+    expect(adminQueueUrl(c, '232', 'IN_PROCESS')).toBe(base + '1&srch%5Bassigned%5D=all');
   });
 });

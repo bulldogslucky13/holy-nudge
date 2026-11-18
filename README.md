@@ -89,7 +89,7 @@ Pushpay refresh tokens are single-use. If one is ever lost (a refresh response t
 - `excludedQueues`: queue names (exact) or ids to ignore, such as the "DONE- do not move here unless you have left a note" and "Not Interested" parking queues.
 - `adminsByQueue`: queue name or id mapped to a list of ChMS individual ids who get that queue's admin summary. A queue that is missing or has an empty list falls back to its ChMS queue managers.
 - `timeZone`, `morningHour`: when the nudge goes out.
-- `chmsBaseUrl`, `queueUrlTemplate`: the "Open in ChMS" link (`{chmsBaseUrl}` and `{queueId}` are filled in).
+- `chmsBaseUrl`, `queueUrlTemplate`: the "Open in ChMS" link (`{chmsBaseUrl}` and `{queueId}` are filled in). `adminQueueUrlTemplate` (optional) is the admin-view link: one queue, one status, every assignee (`{statusId}` is filled in).
 
 ## Adding leaders and sending links
 
@@ -110,4 +110,4 @@ Pushpay is replacing Process Queues with Workflows. Once the church migrates, th
 ## Not yet verified
 
 - Everything marked `SANDBOX:` in `src/chms/` (token endpoint body format, whether the API returns every assignee's people under the approving admin, paging headers, date formats, phone numbers on queue rows, rate-limit headers). Needs the sandbox credentials.
-- The "Open in ChMS" link pattern (`queueUrlTemplate`) comes from real queue URLs, but it assumes the API queue id equals the web `step_id`; confirm by tapping a link once live data is on.
+- The "Open in ChMS" link pattern (`queueUrlTemplate`) comes from real queue URLs, but it assumes the API queue id equals the web `step_id`; confirm by tapping a link once live data is on. The web status number for In Process (1) is inferred; Not Started (3), Waiting (0) and Done (2) come from real URLs.

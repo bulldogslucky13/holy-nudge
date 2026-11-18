@@ -1,6 +1,6 @@
 // Builds the GET /api/me response (docs/ARCHITECTURE.md "JSON contract").
 import { computeNudges, type AdminResult } from '../core/behind';
-import { queueUrl } from '../core/config';
+import { adminQueueUrl, queueUrl } from '../core/config';
 import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from '../core/time';
 import type { HolyNudgeConfig, Queue, QueueEntry, Status } from '../core/types';
 import type { LeaderRow } from '../db';
@@ -79,6 +79,8 @@ export function buildMe({ config, snapshot, leader, leaders, now, baseUrl }: Bui
       individual: { name: e.individual.name, phone: e.individual.phone ?? null, email: e.individual.email ?? null },
     };
   };
+  /** Admin items link to the queue filtered to that status, across every assignee. */
+  const adminItem = (e: QueueEntry): ItemJson => ({ ...item(e), queueUrl: adminQueueUrl(config, e.queueId, e.status) });
   const byUrgency = (a: ItemJson, b: ItemJson) =>
     (b.daysOverdue ?? -1) - (a.daysOverdue ?? -1) || a.queueName.localeCompare(b.queueName) || a.entryId.localeCompare(b.entryId);
 
@@ -114,12 +116,12 @@ export function buildMe({ config, snapshot, leader, leaders, now, baseUrl }: Bui
 
     out.admin = {
       staleUnassigned: adminView.staleUnassigned
-        .map((e) => ({ ...item(e), hoursWaiting: Math.floor((now.getTime() - createdToInstant(e.created, tz)) / HOUR_MS) }))
+        .map((e) => ({ ...adminItem(e), hoursWaiting: Math.floor((now.getTime() - createdToInstant(e.created, tz)) / HOUR_MS) }))
         .sort((a, b) => b.hoursWaiting - a.hoursWaiting || a.entryId.localeCompare(b.entryId)),
       byLeader: adminView.behindByLeader.map((g) => ({
         leader: g.leader ? { name: g.leader.name } : null,
         notificationsOn: g.leader ? notificationsOn(g.leader.id) : false,
-        items: g.entries.map(item).sort(byUrgency),
+        items: g.entries.map(adminItem).sort(byUrgency),
       })),
       leadersWithoutNotifications: [...scopeLeaders]
         .filter(([id]) => !notificationsOn(id))

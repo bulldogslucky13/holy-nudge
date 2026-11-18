@@ -53,4 +53,6 @@ export interface HolyNudgeConfig {
    * Optional; see DEFAULT_QUEUE_URL_TEMPLATE. UNVERIFIED: the real URL pattern is not documented.
    */
   queueUrlTemplate?: string;
+  /** Admin-view link: one queue, one status, every assignee. Placeholders: {chmsBaseUrl} {queueId} {statusId}. */
+  adminQueueUrlTemplate?: string;
 }
