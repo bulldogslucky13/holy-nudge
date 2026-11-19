@@ -230,6 +230,9 @@ export async function resolveMe({ store, config, leader, now, loadSnapshot }: Re
     // even before the first daily run, and tie leaders added by name to their Lead person where certain.
     await syncLeaders(store, peopleSeen(snapshot));
     leaders = await store.listLeaders();
+    // The sync may have just matched the caller's own row: use the refreshed row, or "Mine" would be
+    // built from the stale, unmatched one and show nothing until the next request.
+    leader = leaders.find((l) => l.id === leader.id) ?? leader;
   } else if (isAdminFor(leader, config, snapshot, now)) {
     // Queue-manager admins see notification status for their leaders; no link features.
     leaders = await store.listLeaders();

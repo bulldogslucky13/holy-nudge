@@ -87,9 +87,9 @@ describe('/api/me while not live', () => {
   });
 
   it('staff are unchanged: sample data, admin view, live false', async () => {
-    const staff = row({ id: 7, name: 'Staffer', isAdmin: true });
     const store = new FakeStore();
-    store.addLeader({ name: 'Staffer', isAdmin: true });
+    // The authenticated row always comes from the store, so its id is the store's.
+    const staff = (await store.leaderById(store.addLeader({ name: 'Staffer', isAdmin: true })))!;
     const r = await resolveMe({
       store,
       config: fixtureCfg,

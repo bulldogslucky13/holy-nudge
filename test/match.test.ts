@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { onRequestPost as leaderMatch } from '../functions/api/leader-match';
 import { onRequestGet as me } from '../functions/api/me';
+import { resolveMe } from '../src/api/me';
+import { computeNudges } from '../src/core/behind';
 import { RATE_LIMITS } from '../src/api/http';
 import { createFixtureSource } from '../src/chms/fixture';
 import { loadConfig } from '../src/core/config';
@@ -340,6 +342,21 @@ describe('GET /api/me and matching', () => {
     const target = view.admin.leadPeople[0]!;
     const owner = view.admin.leaders.find((x) => x.name === 'Owner Person')!;
     expect(await (await match(tok.owner, { leaderId: owner.id, chmsId: target.id })).json()).toEqual({ ok: true, matched: true });
+  });
+
+  it('staff whose own row is matched by this very page view get their own students in the same response', async () => {
+    const cfg = loadConfig();
+    const now = new Date();
+    const snap = await loadSnapshot(createFixtureSource(now, cfg.timeZone), cfg);
+    const waiting = computeNudges(snap.queues, snap.entries, cfg, now).leaders[0]!;
+    const id = await insert({ name: waiting.leader.name, token: tok.owner, admin: true });
+    const before = (await store.leaderById(id))!;
+    expect(before.chmsIndividualId).toBeNull();
+
+    const r = await resolveMe({ store, config: cfg, leader: before, now, loadSnapshot: async () => snap });
+    expect(rowById(id)!.chms).toBe(waiting.leader.id);
+    expect(r.ok && r.me.behind.length).toBe(waiting.behind.length);
+    expect(r.ok && r.me.admin?.leaders?.find((l) => l.id === id)?.matched).toBe(true);
   });
 
   it('non-staff before launch get nothing new: no admin, no matching, no rows created or changed', async () => {
