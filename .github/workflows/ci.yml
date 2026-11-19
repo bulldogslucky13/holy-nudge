@@ -38,15 +38,34 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
+      # Runs queue here one at a time, but not necessarily in commit order. If main has moved on
+      # since this run started, skip: the newer commit's own run deploys it. This stops an older
+      # run from overwriting a newer deploy.
+      - name: Check this is still the newest commit on main
+        id: fresh
+        run: |
+          git fetch --quiet --depth=1 origin main
+          latest="$(git rev-parse FETCH_HEAD)"
+          if [ "$latest" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping deploy: main is now at $latest, this run is for $GITHUB_SHA."
+          fi
       - uses: actions/setup-node@v4
+        if: steps.fresh.outputs.deploy == 'true'
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+        if: steps.fresh.outputs.deploy == 'true'
       # Database first, so new code never runs against an older schema.
       - name: Apply database migrations
+        if: steps.fresh.outputs.deploy == 'true'
         run: npm run db:migrate:remote
       - name: Deploy site (Pages)
+        if: steps.fresh.outputs.deploy == 'true'
         run: npm run deploy -- --commit-dirty=true
       - name: Deploy morning job (cron Worker)
+        if: steps.fresh.outputs.deploy == 'true'
         run: npm run deploy:cron
