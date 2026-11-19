@@ -7,6 +7,7 @@ import { createTestD1 } from './sqlite-d1';
 import { createDataSource } from '../src/chms/index';
 import type { DataSource, QueueEntry } from '../src/core/types';
 import { JobFailedError, alertReason, describeFailure, localHour, runDailyJob } from '../src/job/daily';
+import { resolveMe } from '../src/api/me';
 import { FakeSender, FakeStore } from './fakes';
 import { config, entry, person, queue, TEST_TOKEN_KEY } from './helpers';
 
@@ -286,6 +287,151 @@ describe('daily job', () => {
       for (const r of reasons) expect(alertPayload(r)).toMatchObject({ kind: 'alert', count: 0 });
       expect(alertReason('job', new ReauthorizationRequired('invalid_grant'))).toBe('reauth');
       expect(alertReason('job', new Error('x'))).toBe('job');
+    });
+  });
+
+  describe('when the push fires (something new or overdue)', () => {
+    // NOW is Thu Jan 15 08:00 CST; the last successful run was Wed Jan 14 08:00 CST.
+    const LAST = new Date('2026-01-14T14:00:00Z');
+    const H = 3600_000;
+    const ago = (h: number, from = NOW) => new Date(from.getTime() - h * H).toISOString();
+    const outreach = [queue({ id: 'q1', name: 'Outreach', managers: [person('M1', 'Mara')] })];
+    const lee = person('L1', 'Lee');
+
+    function world(list: QueueEntry[], lastRun: Date | null = LAST) {
+      const store = new FakeStore();
+      const ids = {
+        lee: store.addLeader({ chmsIndividualId: 'L1', name: 'Lee' }, 1),
+        mara: store.addLeader({ chmsIndividualId: 'M1', name: 'Mara' }, 1),
+        owner: store.addLeader({ name: 'Owner', isAdmin: true, isOwner: true }, 1),
+      };
+      if (lastRun) store.addRun(lastRun, true);
+      const sender = new FakeSender();
+      const ds = () => source({ listQueues: async () => outreach, listEntries: async (id) => list.filter((e) => e.queueId === id) });
+      const run = async (now = NOW) => {
+        const out = await runDailyJob({ config: cfg, store, sender, dataSource: ds, now, force: true });
+        if (!out.ran) throw new Error('did not run');
+        return out.summary;
+      };
+      const pushed = () => {
+        const who = new Set(sender.sent.map((x) => Number(x.endpoint.split('/')[3])));
+        return (Object.keys(ids) as (keyof typeof ids)[]).filter((k) => who.has(ids[k]));
+      };
+      return { store, sender, ids, run, pushed };
+    }
+
+    it('a new assigned student: the assignee is nudged; the manager and staff are not (someone else\'s new assignment)', async () => {
+      const w = world([entry({ id: 'n1', status: 'NOT_STARTED', assignee: lee, created: ago(6) })]);
+      const summary = await w.run();
+      expect(w.pushed()).toEqual(['lee']);
+      expect(bodiesFor(w.sender, w.ids.lee)).toEqual([{ title: '1 student is waiting on you', body: 'Tap to see who could use a hello', kind: 'leader', count: 1 }]);
+      expect(summary).toMatchObject({
+        firstRunFallback: false, newAssigned: 1, newUnassigned: 0, overdueAssigned: 0, unassignedPastFirstText: 0,
+        ownTriggered: 1, summaryTriggered: 0, skippedNothingNewOrOverdue: 2, leadersNudged: 1, adminsNudged: 0, pushesSent: 1,
+      });
+    });
+
+    it('the grace week is silent for everyone, though the app still counts the student', async () => {
+      const w = world([entry({ id: 'g1', status: 'NOT_STARTED', assignee: lee, created: ago(3 * 24) })]);
+      const summary = await w.run();
+      expect(w.sender.sent).toEqual([]);
+      expect(summary).toMatchObject({ leadersBehind: 1, behind: 1, ownTriggered: 0, summaryTriggered: 0, skippedNothingNewOrOverdue: 3, pushesSent: 0 });
+    });
+
+    it('overdue by age (no due date, more than 7 days) or by due date: assignee, manager and staff are all nudged', async () => {
+      for (const e of [
+        entry({ id: 'o1', status: 'NOT_STARTED', assignee: lee, created: ago(8 * 24) }),
+        entry({ id: 'o2', status: 'IN_PROCESS', due: '2026-01-13', assignee: lee, created: ago(4 * 24) }),
+      ]) {
+        const w = world([e]);
+        const summary = await w.run();
+        expect(w.pushed()).toEqual(['lee', 'mara', 'owner']);
+        expect(summary).toMatchObject({ overdueAssigned: 1, ownTriggered: 1, summaryTriggered: 2, skippedNothingNewOrOverdue: 0 });
+      }
+    });
+
+    it('In Process with no due date never fires, however old', async () => {
+      const w = world([entry({ id: 'p1', status: 'IN_PROCESS', assignee: lee, created: ago(30 * 24) })]);
+      await w.run();
+      expect(w.sender.sent).toEqual([]);
+    });
+
+    it('unassigned: nudged when new, quiet at 2 days, nudged again past 72 hours', async () => {
+      const cases: [number, string[]][] = [[3, ['mara', 'owner']], [48, []], [96, ['mara', 'owner']]];
+      for (const [hours, expected] of cases) {
+        const w = world([entry({ id: 'u1', status: 'NOT_STARTED', assignee: null, created: ago(hours) })]);
+        await w.run();
+        expect([hours, w.pushed()]).toEqual([hours, expected]);
+        if (expected.length) expect(bodiesFor(w.sender, w.ids.mara).map((p) => `${p.title} | ${p.body}`)).toEqual(['1 student waiting | 1 unassigned']);
+      }
+    });
+
+    it('a merged push still carries the full counts, including quiet students', async () => {
+      const list = [
+        entry({ id: 'm1', status: 'NOT_STARTED', assignee: person('M1', 'Mara'), created: ago(5) }), // Mara's own, new: fires
+        entry({ id: 'm2', status: 'NOT_STARTED', assignee: lee, created: ago(3 * 24) }), // Lee's, grace week
+        entry({ id: 'm3', status: 'NOT_STARTED', assignee: null, created: ago(48) }), // unassigned, quiet
+      ];
+      const w = world(list);
+      const summary = await w.run();
+      expect(w.pushed()).toEqual(['mara']);
+      expect(bodiesFor(w.sender, w.ids.mara)).toEqual([{ title: '1 student is waiting on you', body: '3 waiting across your queues, 1 unassigned', kind: 'leader', count: 1 }]);
+      expect(summary).toMatchObject({ ownTriggered: 1, summaryTriggered: 0, combinedNudged: 1, skippedNothingNewOrOverdue: 2 });
+    });
+
+    it('with no previous successful run, the last 24 hours count as new', async () => {
+      const fresh = world([entry({ id: 'f1', status: 'NOT_STARTED', assignee: lee, created: ago(20) })], null);
+      expect(await fresh.run()).toMatchObject({ firstRunFallback: true, newAssigned: 1 });
+      expect(fresh.pushed()).toEqual(['lee']);
+      const older = world([entry({ id: 'f2', status: 'NOT_STARTED', assignee: lee, created: ago(30) })], null);
+      expect(await older.run()).toMatchObject({ firstRunFallback: true, newAssigned: 0 });
+      expect(older.sender.sent).toEqual([]);
+    });
+
+    it('a failed run does not move the window: students from that day are still new at the next good run', async () => {
+      const w = world([entry({ id: 'x1', status: 'NOT_STARTED', assignee: lee, created: ago(30) })], new Date('2026-01-13T14:00:00Z'));
+      w.store.addRun(LAST, false);
+      await w.run();
+      expect(w.pushed()).toEqual(['lee']);
+    });
+
+    it('a completed run moves the window: the same new student is not new the next morning', async () => {
+      const w = world([entry({ id: 'r1', status: 'NOT_STARTED', assignee: lee, created: ago(6) })]);
+      await w.run();
+      expect(w.pushed()).toEqual(['lee']);
+      expect((await w.store.lastSuccessfulRunStart())?.toISOString()).toBe(NOW.toISOString());
+      w.sender.sent.length = 0;
+      await w.run(new Date(NOW.getTime() + 24 * H));
+      expect(w.sender.sent).toEqual([]);
+    });
+
+    it('date-only created: nudged on the day (if already there) and the next morning, then quiet until overdue', async () => {
+      // Recorded as "2026-01-14"; already in the queue for the Jan 14 run.
+      const w = world([entry({ id: 'd1', status: 'NOT_STARTED', assignee: lee, created: '2026-01-14' })], new Date('2026-01-13T14:00:00Z'));
+      const mornings = ['2026-01-14', '2026-01-15', '2026-01-16', '2026-01-17', '2026-01-21', '2026-01-22'];
+      const nudged: string[] = [];
+      for (const d of mornings) {
+        w.sender.sent.length = 0;
+        await w.run(new Date(`${d}T14:00:00Z`));
+        if (w.pushed().includes('lee')) nudged.push(d);
+      }
+      // A week counts from the end of Jan 14, so Jan 22 is the first overdue morning.
+      expect(nudged).toEqual(['2026-01-14', '2026-01-15', '2026-01-22']);
+    });
+
+    it('GET /api/me (staff or leader) never moves the window; only a completed daily run does', async () => {
+      const list = [entry({ id: 'a1', status: 'NOT_STARTED', assignee: lee, created: ago(6) })];
+      const w = world(list);
+      const snapshot = { queues: outreach, entries: list };
+      for (const leader of await w.store.listLeaders()) {
+        const r = await resolveMe({ store: w.store, config: cfg, leader, now: NOW, loadSnapshot: async () => snapshot });
+        expect(r.ok).toBe(true);
+      }
+      expect(w.store.runs).toHaveLength(1);
+      expect((await w.store.lastSuccessfulRunStart())?.toISOString()).toBe(LAST.toISOString());
+      // So the morning run still sees the student as new.
+      await w.run();
+      expect(w.pushed()).toEqual(['lee']);
     });
   });
 
