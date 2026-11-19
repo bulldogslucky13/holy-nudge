@@ -44,6 +44,9 @@ Open the printed `http://localhost:8788/l/<token>` link (printed once; run `add-
 
 ## Deploy
 
+**Automatic.** Merging to `main` deploys by itself (`.github/workflows/ci.yml`): tests and typecheck run, then database migrations, the site, and the morning-job worker, in that order. Pull requests run tests and typecheck only. It needs two repository secrets on GitHub: `CLOUDFLARE_API_TOKEN` (a Cloudflare API token limited to this account with Pages: Edit, Workers Scripts: Edit and D1: Edit) and `CLOUDFLARE_ACCOUNT_ID`. App secrets (VAPID keys, Pushpay credentials, `TOKEN_ENC_KEY` and so on) stay in Cloudflare and are not touched by a deploy. The manual commands below still work.
+
+
 ```sh
 npm test && npm run typecheck
 npm run db:migrate:remote        # only when migrations/ changed
