@@ -1,4 +1,4 @@
-// The daily job: load -> compute behind -> push leaders and admins -> record the run.
+// The daily job: load -> sync and match leader rows -> compute behind -> one push per person -> record the run.
 import { ChmsNotConfiguredError } from '../chms/oauth';
 import { IncompleteDataError } from '../chms/pushpay';
 import { ReauthorizationRequired, TokenPersistError } from '../chms/tokens';
@@ -6,11 +6,11 @@ import { computeNudges } from '../core/behind';
 import { isLive } from '../core/config';
 import { errorClassName } from '../core/errors';
 import type { DataSource, HolyNudgeConfig } from '../core/types';
-import type { JobRunSummary, LeaderRow, Store } from '../db';
+import type { JobRunSummary, Store } from '../db';
 import { addCounts, deliverToLeader, emptyCounts, type DeliveryCounts } from '../push/deliver';
-import { adminPayload, alertPayload, leaderPayload, type AlertReason } from '../push/payload';
+import { adminPayload, alertPayload, combinedPayload, leaderPayload, type AlertReason } from '../push/payload';
 import type { PushSender } from '../push/sender';
-import { adminCounts, globalAdminView, loadSnapshot, peopleSeen, type Snapshot } from './load';
+import { adminCounts, globalAdminView, loadSnapshot, peopleSeen, syncLeaders, type Snapshot } from './load';
 
 /** Local wall-clock hour (0-23) of an instant in an IANA zone. */
 export function localHour(now: Date, timeZone: string): number {
@@ -77,44 +77,62 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     stage = 'job';
 
     const people = peopleSeen(snapshot);
-    await store.upsertLeaders(people);
+    const leadersMatched = await syncLeaders(store, people);
     const rows = await store.listLeaders();
     const byChms = new Map(rows.filter((r) => r.chmsIndividualId).map((r) => [r.chmsIndividualId!, r]));
 
     const nudges = computeNudges(snapshot.queues, snapshot.entries, config, now);
     let delivery: DeliveryCounts = emptyCounts();
+    /** People told about their own students (alone or in a combined push). */
     let leadersNudged = 0;
+    /** People told about a queue summary (alone or in a combined push). */
     let adminsNudged = 0;
+    /** People whose own count and summary went out as one push. */
+    let combinedNudged = 0;
 
     // Until real data is connected, everything computed above is about made-up sample students. Only
     // staff (is_admin) may be nudged about it; a real volunteer whose row happens to map to a sample
     // leader or queue manager must never get "3 students are waiting on you".
     const live = isLive(config);
 
+    // Their own students waiting, per leader row.
+    const own = new Map<number, number>();
     for (const l of nudges.leaders) {
       const row = byChms.get(l.leader.id);
       if (!row || l.behind.length === 0) continue;
       if (!live && !row.isAdmin) continue;
-      const r = await deliverToLeader(store, sender, row.id, leaderPayload(l.behind.length), now);
-      delivery = addCounts(delivery, r);
-      if (r.sent > 0) leadersNudged++;
+      own.set(row.id, l.behind.length);
     }
 
     // Admin summaries: is_admin rows get the whole process; other queue admins get their queues.
-    const summaries = new Map<number, { row: LeaderRow; counts: ReturnType<typeof adminCounts> }>();
+    const summaries = new Map<number, ReturnType<typeof adminCounts>>();
     const globalCounts = adminCounts(globalAdminView(snapshot, config, now));
-    for (const row of rows) if (row.isAdmin) summaries.set(row.id, { row, counts: globalCounts });
+    for (const row of rows) if (row.isAdmin) summaries.set(row.id, globalCounts);
     for (const a of nudges.admins) {
       const row = byChms.get(a.adminId);
       if (!row || summaries.has(row.id)) continue;
       if (!live && !row.isAdmin) continue;
-      summaries.set(row.id, { row, counts: adminCounts(a) });
+      summaries.set(row.id, adminCounts(a));
     }
-    for (const { row, counts } of summaries.values()) {
-      if (counts.waiting === 0) continue; // nothing to nudge about
-      const r = await deliverToLeader(store, sender, row.id, adminPayload(counts.waiting, counts.leaders, counts.unassigned), now);
+
+    // One push per person per morning: their own count, their summary, or both in one.
+    for (const row of rows) {
+      const mine = own.get(row.id) ?? 0;
+      const counts = summaries.get(row.id);
+      const waiting = counts?.waiting ?? 0; // a summary with nothing waiting is not worth a push
+      if (mine === 0 && waiting === 0) continue;
+      const payload =
+        mine > 0 && waiting > 0
+          ? combinedPayload(mine, waiting, counts!.unassigned, row.isAdmin ? 'all' : 'yours')
+          : mine > 0
+            ? leaderPayload(mine)
+            : adminPayload(waiting, counts!.leaders, counts!.unassigned);
+      const r = await deliverToLeader(store, sender, row.id, payload, now);
       delivery = addCounts(delivery, r);
-      if (r.sent > 0) adminsNudged++;
+      if (r.sent === 0) continue;
+      if (mine > 0) leadersNudged++;
+      if (waiting > 0) adminsNudged++;
+      if (mine > 0 && waiting > 0) combinedNudged++;
     }
 
     const summary: JobRunSummary = {
@@ -122,11 +140,13 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
       queues: snapshot.queues.length,
       entries: snapshot.entries.length,
       leadersSeen: people.length,
+      leadersMatched,
       leadersBehind: nudges.leaders.length,
       behind: nudges.leaders.reduce((n, l) => n + l.behind.length, 0),
       unassignedWaiting: globalCounts.unassigned,
       leadersNudged,
       adminsNudged,
+      combinedNudged,
       pushesSent: delivery.sent,
       pushesFailed: delivery.failed,
       subscriptionsRemoved: delivery.removed,

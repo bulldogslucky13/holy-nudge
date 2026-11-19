@@ -13,7 +13,7 @@ import { config } from './helpers';
 
 const NOW = new Date('2026-01-15T14:00:00Z'); // 08:00 CST
 const row = (over: Partial<LeaderRow>): LeaderRow => ({
-  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, ...over,
+  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, ...over,
 });
 
 const fixtureCfg = loadConfig(); // the bundled config; asserted below to be the fixture one
@@ -48,6 +48,9 @@ describe('/api/me while not live', () => {
       listLeaders: vi.fn(async () => {
         throw new Error('no leader list for non-staff');
       }),
+      applyMatches: vi.fn(async () => {
+        throw new Error('no matching for non-staff');
+      }),
     };
     let sawBehind = 0;
     for (const [chmsId, name] of people) {
@@ -71,6 +74,7 @@ describe('/api/me while not live', () => {
     expect(loader).not.toHaveBeenCalled();
     expect(store.upsertLeaders).not.toHaveBeenCalled();
     expect(store.listLeaders).not.toHaveBeenCalled();
+    expect(store.applyMatches).not.toHaveBeenCalled();
   });
 
   it('buildMe itself refuses to show sample data to non-staff, even when handed a full snapshot', async () => {
@@ -83,9 +87,9 @@ describe('/api/me while not live', () => {
   });
 
   it('staff are unchanged: sample data, admin view, live false', async () => {
-    const staff = row({ id: 7, name: 'Staffer', isAdmin: true });
     const store = new FakeStore();
-    store.addLeader({ name: 'Staffer', isAdmin: true });
+    // The authenticated row always comes from the store, so its id is the store's.
+    const staff = (await store.leaderById(store.addLeader({ name: 'Staffer', isAdmin: true })))!;
     const r = await resolveMe({
       store,
       config: fixtureCfg,
@@ -160,8 +164,10 @@ describe('daily job while not live', () => {
     for (const id of mapped.filter((i) => i !== staffMappedId)) expect(toLeader(id)).toEqual([]);
 
     expect(toLeader(staffPlain).map((s) => s.payload.kind)).toEqual(['admin']);
-    // The mapped staff row still gets its summary (and its own leader nudge if it has students behind).
-    expect(toLeader(staffMappedId).map((s) => s.payload.kind)).toContain('admin');
+    // The mapped staff row gets one push: its summary, combined with its own count if it has students behind.
+    const mappedPushes = toLeader(staffMappedId);
+    expect(mappedPushes).toHaveLength(1);
+    expect(mappedPushes[0]!.payload.body).toMatch(/^\d+ waiting across all queues|^Across /);
     // Everything sent went to staff, and only counts.
     const staffIds = new Set([staffPlain, staffMappedId]);
     for (const s of sender.sent) {

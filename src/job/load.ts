@@ -1,6 +1,8 @@
 // Read everything the job and views need from the data source, skipping excluded queues.
 import { filterExcludedQueues, computeNudges, type AdminResult, type BehindGroup } from '../core/behind';
+import { planMatches } from '../core/match';
 import type { DataSource, HolyNudgeConfig, Queue, QueueEntry } from '../core/types';
+import type { Store } from '../db';
 
 export interface Snapshot {
   /** Non-excluded queues of the configured process. */
@@ -32,6 +34,20 @@ export function peopleSeen(s: Snapshot): { id: string; name: string }[] {
   for (const q of s.queues) for (const p of q.managers) m.set(p.id, p.name);
   for (const e of s.entries) if (e.assignee) m.set(e.assignee.id, e.assignee.name);
   return [...m].map(([id, name]) => ({ id, name }));
+}
+
+/**
+ * Make sure every Lead person seen has a leader row, then tie leaders added by name (no ChMS id) to their
+ * Lead person where the name rules in src/core/match.ts allow it, merging away the spare automatic row.
+ * Used by the daily job and staff page views. Returns how many rows were matched (a count, never names).
+ */
+export async function syncLeaders(
+  store: Pick<Store, 'upsertLeaders' | 'listLeaders' | 'applyMatches'>,
+  people: { id: string; name: string }[],
+): Promise<number> {
+  await store.upsertLeaders(people);
+  const merges = planMatches(await store.listLeaders(), people);
+  return merges.length ? store.applyMatches(merges) : 0;
 }
 
 const GLOBAL_ADMIN = '\u0000all';

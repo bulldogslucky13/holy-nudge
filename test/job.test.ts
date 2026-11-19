@@ -90,6 +90,57 @@ describe('daily job', () => {
     expect(JSON.stringify(store.runs[0]!.summary)).not.toMatch(/Lee|Liv|Mara/);
   });
 
+  describe('one push per person per morning', () => {
+    // Mara manages q1 and also has her own students behind there; the owner (staff) is also assigned students.
+    const mara = person('M1', 'Mara');
+    const owner = person('O1', 'Ozzie Owner');
+    const both: QueueEntry[] = [
+      ...entries,
+      entry({ id: 'e7', queueId: 'q1', status: 'NOT_STARTED', assignee: mara }),
+      entry({ id: 'e8', queueId: 'q2', status: 'NOT_STARTED', assignee: owner }),
+      entry({ id: 'e9', queueId: 'q2', status: 'NOT_STARTED', assignee: owner }),
+    ];
+    const src = () => source({ listEntries: async (id) => both.filter((e) => e.queueId === id) });
+
+    function setupBoth() {
+      const s = setup();
+      s.store.leaders.find((l) => l.id === s.ids.owner)!.chmsIndividualId = 'O1';
+      return s;
+    }
+
+    it('own students + a summary: one combined push (title as the leader nudge, body the summary, opens their list)', async () => {
+      const { store, sender, ids } = setupBoth();
+      const out = await runDailyJob({ config: cfg, store, sender, dataSource: src, now: NOW });
+      expect(bodiesFor(sender, ids.mara)).toEqual([{ title: '1 student is waiting on you', body: '4 waiting across your queues, 1 unassigned', kind: 'leader', count: 1 }]);
+      expect(bodiesFor(sender, ids.owner)).toEqual([{ title: '2 students are waiting on you', body: '7 waiting across all queues, 1 unassigned', kind: 'leader', count: 2 }]);
+      // Only own, or only a summary: unchanged.
+      expect(bodiesFor(sender, ids.lee1)).toEqual([{ title: '2 students are waiting on you', body: 'Tap to see who could use a hello', kind: 'leader', count: 2 }]);
+      expect(bodiesFor(sender, ids.milo)).toEqual([{ title: '3 students waiting', body: 'Across 2 leaders', kind: 'admin', count: 3 }]);
+      // Exactly one push per device.
+      const perEndpoint = new Map<string, number>();
+      for (const s of sender.sent) perEndpoint.set(s.endpoint, (perEndpoint.get(s.endpoint) ?? 0) + 1);
+      expect([...perEndpoint.values()].every((n) => n === 1)).toBe(true);
+      expect(out.ran && out.summary).toMatchObject({ leadersNudged: 3, adminsNudged: 3, combinedNudged: 2, pushesSent: 4 });
+    });
+
+    it('drops the unassigned part when nobody is unassigned', async () => {
+      const { store, sender, ids } = setupBoth();
+      const noUnassigned = both.filter((e) => e.assignee !== null);
+      await runDailyJob({ config: cfg, store, sender, dataSource: () => source({ listEntries: async (id) => noUnassigned.filter((e) => e.queueId === id) }), now: NOW });
+      expect(bodiesFor(sender, ids.mara).map((p) => p.body)).toEqual(['3 waiting across your queues']);
+      expect(bodiesFor(sender, ids.owner).map((p) => p.body)).toEqual(['6 waiting across all queues']);
+    });
+
+    it('before launch, a non-staff queue manager with own students still gets nothing; staff get the combined push', async () => {
+      const { store, sender, ids } = setupBoth();
+      await runDailyJob({ config: { ...cfg, dataSource: 'fixture' }, store, sender, dataSource: src, now: NOW });
+      expect(bodiesFor(sender, ids.mara)).toEqual([]);
+      expect(bodiesFor(sender, ids.lee1)).toEqual([]);
+      expect(bodiesFor(sender, ids.owner).map((p) => p.kind)).toEqual(['leader']);
+      expect(sender.sent).toHaveLength(1);
+    });
+  });
+
   describe('time gate (morningHour 8, America/Chicago)', () => {
     const cases: [string, string, boolean][] = [
       ['winter 13:00Z = 07:00 CST', '2026-01-15T13:00:00Z', false],

@@ -436,6 +436,37 @@ details.group > .list { padding: 4px 4px 8px; }
   -webkit-mask-image: url("/bell-off.svg");
   mask-image: url("/bell-off.svg");
 }
+/* Lead match status after the name: a check in a circle (sage) or a dashed circle with a question mark (clay).
+   Masks like the bell. The button's hit area is a pseudo-element, so the tap target is 44px without moving anything. */
+.match-icon {
+  position: relative;
+  display: inline-block;
+  /* Centre on the capitals, not the x-height: Montserrat caps are 0.7em tall, so a 1em icon sits 0.15em below the baseline. */
+  vertical-align: -0.15em;
+  width: 1em;
+  height: 1em;
+  margin: 0 0 0 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  font: inherit;
+}
+button.match-icon { cursor: pointer; }
+button.match-icon::after { content: ""; position: absolute; inset: -14px; }
+.match-glyph {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--accent);
+  -webkit-mask: url("/match-ok.svg") center / contain no-repeat;
+  mask: url("/match-ok.svg") center / contain no-repeat;
+}
+.match-icon.none .match-glyph {
+  background: var(--warn);
+  -webkit-mask-image: url("/match-none.svg");
+  mask-image: url("/match-none.svg");
+}
 .row .you { color: var(--muted); font-weight: 500; }
 .card > .status-line:empty { display: none; }
 .row.person { flex-wrap: nowrap; align-items: flex-start; }
@@ -488,9 +519,71 @@ details.group > .list { padding: 4px 4px 8px; }
 .role-option:has(input:checked) { border-color: var(--line-strong); background: var(--accent-soft); }
 .role-option:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
 
+/* ---------- matching a leader to Lead (staff) ---------- */
+
+/* Calm, not an alarm: an outlined chip in the muted text colour. */
+.match-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+}
+.match-form { display: grid; gap: 8px; }
+.match-panel .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.match-panel:focus { outline: none; } /* focused only to place a phone's screen reader here, not a control */
+.match-panel > .status-line:empty, .match-form > .status-line:empty, .chosen-line:empty { display: none; }
+.match-form .text-input { width: 100%; }
+.match-form > .field-label { margin-top: 4px; }
+
+/* radio rows: one person each */
+.person-set { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.person-set legend { padding: 0; margin-bottom: 8px; }
+.person-set > .muted:empty { display: none; }
+.person-list { display: grid; gap: 6px; }
+.person-list.scroll {
+  max-height: min(22rem, 55vh); /* a few dozen people scroll inside the card, not down the page */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.person-option {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: center;
+  min-height: 48px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1.5px solid var(--line);
+  background: var(--card);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.person-option input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); }
+.person-option .person-name { overflow-wrap: anywhere; }
+.person-option:has(input:checked) { border-color: var(--line-strong); background: var(--accent-soft); }
+/* inset, so the ring is not clipped by the scrolling list */
+.person-option:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: -3px; }
+.likely-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.person-option:has(input:checked) .likely-tag { background: var(--card); }
+.empty-line { display: grid; gap: 4px; justify-items: start; padding: 4px 0; }
+.chosen-line { font-weight: 600; }
+
 /* ---------- small layout helpers (instead of style attributes, so the CSP needs no 'unsafe-inline') ---------- */
 
 .gap-top { margin-top: 8px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .gap-bottom { margin-bottom: 16px; }
 .copy-buffer { position: fixed; top: 0; left: 0; opacity: 0; font-size: 16px; }
 

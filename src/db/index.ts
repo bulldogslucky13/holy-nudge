@@ -1,4 +1,5 @@
 // D1 queries. The rest of the app talks to the Store interface so tests can use a fake.
+import type { Merge } from '../core/match';
 import { base64urlEncode } from '../push/base64url';
 
 export interface LeaderRow {
@@ -15,6 +16,8 @@ export interface LeaderRow {
   revokedAt: string | null;
   /** Number of push subscriptions (devices with notifications on). */
   subscriptionCount: number;
+  /** Staff set or cleared this row's Lead match by hand (migration 0004): automatic matching leaves it alone. */
+  matchByHand: boolean;
 }
 
 export interface SubscriptionRow {
@@ -42,6 +45,18 @@ export interface Store {
    */
   upsertLeaders(people: { id: string; name: string }[]): Promise<void>;
   listLeaders(): Promise<LeaderRow[]>;
+  /**
+   * Automatic Lead matches, in one atomic batch: each `keepId` (a row with no ChMS id, not decided by hand)
+   * takes `chmsId`, and `dropId` (that person's spare row: no link, not staff or owner, no devices) is deleted.
+   * Each merge re-checks those conditions in SQL and is skipped if anything changed. Returns how many applied.
+   */
+  applyMatches(merges: Merge[]): Promise<number>;
+  /**
+   * Staff decide a row's match by hand (sets match_by_hand). `chmsId` null clears it (the link stays).
+   * Otherwise the row takes `chmsId`, and `dropId` (the person's spare row, same conditions as above) is
+   * deleted. False when another row still holds `chmsId` or the row is gone.
+   */
+  setMatch(leaderId: number, chmsId: string | null, dropId: number | null): Promise<boolean>;
   leaderById(id: number): Promise<LeaderRow | null>;
   /** The leader whose link token this is (looked up by SHA-256), unless the link was turned off. */
   leaderByToken(token: string): Promise<LeaderRow | null>;
@@ -94,11 +109,12 @@ interface LeaderDbRow {
   last_seen_at: string | null;
   revoked_at: string | null;
   subscription_count: number;
+  match_by_hand: number;
 }
 
 // Never selects token or token_hash: callers only learn whether a link exists.
 const LEADER_SELECT = `
-  SELECT l.id, l.chms_individual_id, l.name, l.is_admin, l.is_owner, l.last_seen_at, l.revoked_at,
+  SELECT l.id, l.chms_individual_id, l.name, l.is_admin, l.is_owner, l.last_seen_at, l.revoked_at, l.match_by_hand,
          (l.revoked_at IS NULL AND (l.token_hash IS NOT NULL OR l.token IS NOT NULL)) AS has_link,
          (SELECT COUNT(*) FROM push_subscriptions s WHERE s.leader_id = l.id) AS subscription_count
   FROM leaders l`;
@@ -114,8 +130,17 @@ function toLeader(r: LeaderDbRow): LeaderRow {
     lastSeenAt: r.last_seen_at,
     revokedAt: r.revoked_at,
     subscriptionCount: r.subscription_count,
+    matchByHand: r.match_by_hand === 1,
   };
 }
+
+// A row that may be deleted to hand its Lead person to another row: still holds ?chms, no working link,
+// not staff or owner, no devices (the same test as holdsLeadPerson in src/core/match.ts).
+const SPARE_ROW = `
+  d.chms_individual_id = ?2
+  AND NOT (d.revoked_at IS NULL AND (d.token_hash IS NOT NULL OR d.token IS NOT NULL))
+  AND d.is_admin = 0 AND d.is_owner = 0
+  AND NOT EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.leader_id = d.id)`;
 
 export function createD1Store(db: D1Database): Store {
   return {
@@ -128,6 +153,56 @@ export function createD1Store(db: D1Database): Store {
            WHERE leaders.name <> excluded.name AND leaders.is_admin = 0 AND leaders.is_owner = 0`,
       );
       await db.batch([...unique].map(([id, name]) => stmt.bind(id, name)));
+    },
+
+    async applyMatches(merges) {
+      if (merges.length === 0) return 0;
+      // ?1 keep id, ?2 ChMS id, ?3 spare row id. The keep row must still be unmatched and not decided by hand;
+      // the delete runs only if the update will (and the update only once nobody else holds the id).
+      const keepOk = `EXISTS (SELECT 1 FROM leaders k WHERE k.id = ?1 AND k.chms_individual_id IS NULL AND k.match_by_hand = 0)`;
+      const del = db.prepare(`DELETE FROM leaders AS d WHERE d.id = ?3 AND ${SPARE_ROW} AND ${keepOk}`);
+      const upd = db.prepare(
+        `UPDATE leaders SET chms_individual_id = ?2
+         WHERE id = ?1 AND chms_individual_id IS NULL AND match_by_hand = 0
+           AND NOT EXISTS (SELECT 1 FROM leaders o WHERE o.chms_individual_id = ?2)`,
+      );
+      const stmts: D1PreparedStatement[] = [];
+      const updIndex: number[] = [];
+      for (const m of merges) {
+        if (m.dropId !== null) stmts.push(del.bind(m.keepId, m.chmsId, m.dropId));
+        updIndex.push(stmts.length);
+        stmts.push(upd.bind(m.keepId, m.chmsId));
+      }
+      const results = await db.batch(stmts);
+      return updIndex.filter((i) => (results[i]?.meta.changes ?? 0) === 1).length;
+    },
+
+    async setMatch(leaderId, chmsId, dropId) {
+      if (chmsId === null) {
+        const r = await db
+          .prepare(`UPDATE leaders SET chms_individual_id = NULL, match_by_hand = 1 WHERE id = ?1`)
+          .bind(leaderId)
+          .run();
+        return r.meta.changes === 1;
+      }
+      const stmts: D1PreparedStatement[] = [];
+      if (dropId !== null) {
+        stmts.push(
+          db
+            .prepare(`DELETE FROM leaders AS d WHERE d.id = ?3 AND d.id <> ?1 AND ${SPARE_ROW} AND EXISTS (SELECT 1 FROM leaders k WHERE k.id = ?1)`)
+            .bind(leaderId, chmsId, dropId),
+        );
+      }
+      stmts.push(
+        db
+          .prepare(
+            `UPDATE leaders SET chms_individual_id = ?2, match_by_hand = 1
+             WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM leaders o WHERE o.chms_individual_id = ?2 AND o.id <> ?1)`,
+          )
+          .bind(leaderId, chmsId),
+      );
+      const results = await db.batch(stmts);
+      return (results[results.length - 1]?.meta.changes ?? 0) === 1;
     },
 
     async listLeaders() {

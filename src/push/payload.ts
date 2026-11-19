@@ -30,6 +30,17 @@ export function adminPayload(waiting: number, leaders: number, unassigned: numbe
   return { title: `${students(waiting)} waiting`, body, kind: 'admin', count: waiting };
 }
 
+/**
+ * One morning push for someone with their own students waiting who also gets an admin summary.
+ * Title as leaderPayload; body "12 waiting across your queues, 3 unassigned" (queue managers) or
+ * "... across all queues ..." (staff), the unassigned part only when there are some. Lands on their own
+ * list, so kind and count are the leader ones.
+ */
+export function combinedPayload(own: number, waiting: number, unassigned: number, scope: 'all' | 'yours'): PushPayload {
+  const across = `${waiting} waiting across ${scope === 'all' ? 'all queues' : 'your queues'}`;
+  return { ...leaderPayload(own), body: unassigned > 0 ? `${across}, ${unassigned} unassigned` : across };
+}
+
 export function testPayload(): PushPayload {
   return { title: 'Notifications are on', body: "You're all set!", kind: 'test', count: 0 };
 }
