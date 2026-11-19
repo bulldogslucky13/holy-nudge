@@ -4,8 +4,8 @@
  * - Caches only the static shell. /api/ responses are never cached or touched.
  */
 
-const CACHE = 'holy-nudge-shell-v6';
-const SHELL_ASSETS = ['/styles.css', '/app.js', '/icon.svg', '/logo.svg', '/favicon.svg', '/icon-192.png', '/apple-touch-icon.png'];
+const CACHE = 'holy-nudge-shell-v7';
+const SHELL_ASSETS = ['/styles.css', '/app.js', '/icon.svg', '/logo.svg', '/logo-dark.svg', '/favicon.svg', '/icon-192.png', '/apple-touch-icon.png'];
 const SHELL_PAGE = '/__shell'; // cache key for the index page (the "open your link" screen / offline fallback)
 
 /* ---------- tiny IndexedDB key/value store (holds only the personal-link token) ---------- */

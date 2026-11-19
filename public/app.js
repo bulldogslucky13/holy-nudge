@@ -547,8 +547,19 @@
 
   /* ---------------------------------------------------------------- simple message screens */
 
+  /* The wordmark comes as two fixed-colour files chosen by the page. A single SVG with its own
+     prefers-color-scheme rule is unreliable inside <img> on iOS (it flips between light and dark). */
+  function logoPicture(cls, w, hgt) {
+    return h(
+      'picture',
+      {},
+      h('source', { srcset: '/logo-dark.svg', media: '(prefers-color-scheme: dark)' }),
+      h('img', { class: cls || null, src: '/logo.svg', alt: 'Holy Nudge', width: w, height: hgt })
+    );
+  }
+
   function markImg() {
-    return h('img', { class: 'logo', src: '/logo.svg', alt: 'Holy Nudge', width: '200', height: '48' });
+    return logoPicture('logo', '200', '48');
   }
 
   function loadingScreen() {
@@ -950,7 +961,7 @@
       h(
         'div',
         { class: 'top' },
-        h('div', { class: 'brand' }, h('img', { src: '/logo.svg', alt: 'Holy Nudge', width: '150', height: '36' })),
+        h('div', { class: 'brand' }, logoPicture('', '150', '36')),
         h('button', { class: 'btn small-btn', type: 'button', onclick: function () { load(true); } }, 'Refresh')
       )
     );

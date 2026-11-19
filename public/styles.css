@@ -204,6 +204,7 @@ a { color: var(--accent); }
 }
 .top .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
 .top .brand img { display: block; height: 36px; width: auto; }
+picture { display: contents; }
 
 .hello { margin: 14px 0 18px; display: grid; gap: 4px; }
 
