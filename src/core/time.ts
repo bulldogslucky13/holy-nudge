@@ -92,9 +92,11 @@ export function zonedWallTimeToInstant(
 const LOCAL_DATETIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3})\d*)?)?$/;
 
 /**
- * The instant a ChMS `created` value stands for, for elapsed-time rules (24 h unassigned).
+ * The instant a ChMS `created` value stands for, for elapsed-time and "new since the last run" rules
+ * (src/core/behind.ts: first-text window, follow-up week, isNewSinceLastRun).
  * - Date-only ("2026-09-15", which the Pushpay guide shows) is taken as the END of that
- *   calendar day in `timeZone` (the next local midnight), so it can never look older than it is.
+ *   calendar day in `timeZone` (the next local midnight), so it can never look older than it is (and,
+ *   for "new", is never missed: see isNewSinceLastRun).
  * - Datetimes with an offset (or Z) are exact.
  * - Datetimes with no offset are local wall time in `timeZone` (as for due values).
  */
