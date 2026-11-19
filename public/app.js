@@ -232,6 +232,8 @@
     { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, canManage: false, isYou: false },
   ];
 
+  var mockAdded = []; // people "added" in a mock session (so a repeat name answers name_taken)
+
   function mockMe() {
     var admin = mock === 'admin' || mock === 'admin-sample';
     var items = [
@@ -282,6 +284,15 @@
           return resolve({ url: location.origin + '/l/' + fake, self: !!row.isYou });
         }
         if (path === '/api/leader-revoke' && method === 'POST') return resolve({ ok: true });
+        if (path === '/api/leader-add' && method === 'POST') {
+          var nm = String((body && body.name) || '').replace(/\s+/g, ' ').trim();
+          var taken = mockLeaders.concat(mockAdded).some(function (l) { return l.name.toLowerCase() === nm.toLowerCase(); });
+          if (taken) return reject(new ApiError(409, 'name_taken'));
+          var added = { id: 100 + mockAdded.length, name: nm };
+          mockAdded.push(added);
+          var link = 'mock' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + 'link';
+          return resolve({ url: location.origin + '/l/' + link, leader: added });
+        }
         reject(new ApiError(404, 'not_found'));
       }, 250);
     });
@@ -450,6 +461,8 @@
     loadedAt: 0,
     errorCode: null,
     minted: {}, // leader id -> URL just minted (memory only, shown once, gone on reload)
+    justAdded: null, // id of the leader staff just added: their new-link panel shows under the add form
+    addName: '', // what is typed in the add form (survives a re-render)
   };
 
   /* Real data is not connected yet and this is not staff: there is no student list to show, only setup. */
@@ -1109,9 +1122,96 @@
       { class: 'section' },
       h('h2', {}, 'Leader links'),
       h('p', { class: 'muted' }, 'Each link is personal and works like a password. A new link is shown just once, so send it straight away. Making a new one turns the old one off.'),
+      addLeaderPanel(leaders),
       leaders.length
         ? h('ul', { class: 'list' }, leaders.map(leaderRow))
         : h('p', { class: 'muted' }, 'No leaders yet. They appear after the first morning run.')
+    );
+  }
+
+  function addErrorWords(e, name) {
+    var code = e instanceof ApiError ? e.code : '';
+    if (code === 'name_taken') return name + ' is already on the list. Use New link on their row.';
+    if (code === 'name_required') return 'Type their name first.';
+    if (code === 'name_too_short') return 'That’s a bit short. Please use at least 2 characters.';
+    if (code === 'name_too_long') return 'That’s a long name. Please keep it under 60 characters.';
+    if (code === 'invalid_name') return 'That name has a character we can’t use. Please type it again.';
+    if (e instanceof ApiError && (e.status === 429 || e.status === 403)) return linkErrorWords(e);
+    return 'That didn’t go through. Please check your connection and try again.';
+  }
+
+  /* Staff add someone who isn't in ChMS yet: name in, personal link out (shown once, in the usual panel). */
+  function addLeaderPanel(leaders) {
+    var statusEl = h('p', { class: 'status-line small', role: 'status' });
+    var input = h('input', {
+      class: 'text-input',
+      id: 'add-leader-name',
+      name: 'leader-name',
+      type: 'text',
+      maxlength: '80',
+      autocapitalize: 'words',
+      autocomplete: 'off',
+      autocorrect: 'off',
+      spellcheck: 'false',
+      enterkeyhint: 'done',
+    });
+    input.value = S.addName;
+    input.addEventListener('input', function () { S.addName = input.value; });
+    var btn = h('button', { class: 'btn primary', type: 'submit' }, 'Add and make link');
+
+    function fail(msg) {
+      statusEl.className = 'status-line small err';
+      statusEl.textContent = msg;
+    }
+
+    var form = h(
+      'form',
+      { class: 'add-form', novalidate: true },
+      h('label', { class: 'field-label', for: 'add-leader-name' }, 'Their name'),
+      h('div', { class: 'add-row' }, input, btn),
+      statusEl
+    );
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var name = input.value.replace(/\s+/g, ' ').trim();
+      var len = Array.from(name).length;
+      if (!name) return fail('Type their name first.');
+      if (len < 2) return fail('That’s a bit short. Please use at least 2 characters.');
+      if (len > 60) return fail('That’s a long name. Please keep it under 60 characters.');
+      btn.disabled = true;
+      statusEl.className = 'status-line small';
+      statusEl.textContent = 'Adding ' + name + '…';
+      api('/api/leader-add', { method: 'POST', body: { name: name } })
+        .then(function (res) {
+          var row = { id: res.leader.id, name: res.leader.name, hasLink: true, lastSeenAt: null, notificationsOn: false, canManage: true, isYou: false };
+          S.me.admin.leaders.push(row);
+          S.me.admin.leaders.sort(function (a, b) { return a.name.localeCompare(b.name); });
+          S.me.admin.leadersWithoutNotifications.push({ name: row.name });
+          S.me.admin.leadersWithoutNotifications.sort(function (a, b) { return a.name.localeCompare(b.name); });
+          S.minted[row.id] = res.url;
+          S.justAdded = row.id;
+          S.addName = '';
+          renderInPlace();
+        })
+        .catch(function (e) {
+          if (e instanceof ApiError && e.status === 401) {
+            S.view = 'invalid';
+            return render();
+          }
+          btn.disabled = false;
+          fail(addErrorWords(e, name));
+        });
+    });
+
+    var added = S.justAdded === null ? null : leaders.filter(function (l) { return l.id === S.justAdded; })[0];
+    var url = added ? S.minted[added.id] : null;
+    return h(
+      'div',
+      { class: 'panel' },
+      h('h3', {}, 'Add a leader'),
+      h('p', { class: 'muted small' }, 'For someone who isn’t in ChMS yet. We’ll make them a personal link. Send it to them: they open it on their phone and follow the steps.'),
+      form,
+      added && url ? mintedPanel(added, url) : null
     );
   }
 
@@ -1231,14 +1331,14 @@
           });
         } }, label),
         h('a', { class: 'btn small-btn primary', href: mailtoFor({ name: l.name, url: url }), 'aria-label': 'Email the new link to ' + l.name }, 'Email'),
-        h('button', { class: 'btn small-btn link', type: 'button', onclick: function () { delete S.minted[l.id]; renderInPlace(); } }, 'Done')
+        h('button', { class: 'btn small-btn link', type: 'button', onclick: function () { delete S.minted[l.id]; if (S.justAdded === l.id) S.justAdded = null; renderInPlace(); } }, 'Done')
       )
     );
   }
 
   function leaderRow(l) {
     var statusEl = h('p', { class: 'status-line small', role: 'status' });
-    var minted = S.minted[l.id];
+    var minted = l.id === S.justAdded ? null : S.minted[l.id]; // the just-added person's link shows under the add form
     var btns = [];
     if (l.canManage) {
       var mintBtn = h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'New link for ' + l.name }, 'New link');

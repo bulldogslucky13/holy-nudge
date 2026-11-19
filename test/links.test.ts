@@ -2,12 +2,14 @@
 // hashed link tokens, the legacy plaintext fallback, minting and revoking, staff-only and owner
 // protection, rate limits, last_seen_at, subscription takeover, and the /api/me privacy contract.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { onRequestPost as leaderAdd } from '../functions/api/leader-add';
 import { onRequestPost as leaderLink } from '../functions/api/leader-link';
 import { onRequestPost as leaderRevoke } from '../functions/api/leader-revoke';
 import { onRequestGet as me } from '../functions/api/me';
 import { onRequestPost as subscribe } from '../functions/api/subscribe';
 import { onRequestPost as testPush } from '../functions/api/test-push';
 import { RATE_LIMITS } from '../src/api/http';
+import { cleanLeaderName } from '../src/api/leaders';
 import { CSP } from '../src/api/headers';
 import { hashToken } from '../src/db';
 import { createTestD1, type TestD1 } from './sqlite-d1';
@@ -172,6 +174,122 @@ describe('POST /api/leader-link and /api/leader-revoke', () => {
     expect((await call(me, '/api/me', tok.staff)).status).toBe(200);
     for (const bad of [999, '3', -1, 1.5, null]) {
       expect((await call(leaderLink, '/api/leader-link', tok.staff, { leaderId: bad })).status).toBe(404);
+    }
+  });
+});
+
+describe('POST /api/leader-add', () => {
+  type AddBody = { url: string; leader: { id: number; name: string } };
+  const add = (token: string | null, body?: unknown) => call(leaderAdd, '/api/leader-add', token, body);
+  const rowByName = (name: string) =>
+    t.sqlite.prepare('SELECT id, chms_individual_id, name, token, token_hash, is_admin, is_owner, revoked_at FROM leaders WHERE name = ?').get(name) as Record<string, unknown>;
+
+  it('staff add a plain leader; the link works on /api/me with the pre-launch shape; only the hash is stored', async () => {
+    const res = await add(tok.staff, { name: '  Pat   Volunteer ' });
+    expect(res.status).toBe(200);
+    const { url, leader } = (await res.json()) as AddBody;
+    expect(leader.name).toBe('Pat Volunteer');
+    expect(url).toMatch(/^https:\/\/holynudge\.cameronbristol\.xyz\/l\/[A-Za-z0-9_-]{43}$/);
+    const fresh = url.split('/l/')[1]!;
+
+    const row = rowByName('Pat Volunteer');
+    expect(row).toMatchObject({ id: leader.id, chms_individual_id: null, is_admin: 0, is_owner: 0, token: null, token_hash: await hashToken(fresh), revoked_at: null });
+    expect(JSON.stringify(t.sqlite.prepare('SELECT * FROM leaders').all())).not.toContain(fresh);
+
+    const me2 = await call(me, '/api/me', fresh);
+    expect(me2.status).toBe(200);
+    const body = (await me2.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ leader: { name: 'Pat Volunteer', isAdmin: false, notificationsOn: false }, live: false, behind: [] });
+    expect('admin' in body).toBe(false);
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
+  });
+
+  it('appears in the staff leader list with a link and no notifications', async () => {
+    const { leader } = (await (await add(tok.owner, { name: 'Riley Newperson' })).json()) as AddBody;
+    const view = (await (await call(me, '/api/me', tok.owner)).json()) as { admin: { leaders: { id: number; name: string; hasLink: boolean; canManage: boolean; notificationsOn: boolean }[] } };
+    expect(view.admin.leaders.find((l) => l.id === leader.id)).toMatchObject({ name: 'Riley Newperson', hasLink: true, canManage: true, notificationsOn: false });
+  });
+
+  it('is staff only: plain leaders and implicit queue-manager admins get 403, no token gets 401, and nothing is created', async () => {
+    for (const who of [tok.leader, tok.manager]) {
+      const res = await add(who, { name: 'Sneaky Person' });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'forbidden' });
+    }
+    expect((await add(null, { name: 'Sneaky Person' })).status).toBe(401);
+    expect(t.sqlite.prepare("SELECT COUNT(*) AS n FROM leaders WHERE name = 'Sneaky Person'").get()).toEqual({ n: 0 });
+  });
+
+  it('validates the name: trimmed, 2 to 60 characters, no control characters', async () => {
+    const cases: [unknown, number, string][] = [
+      [undefined, 400, 'name_required'],
+      [null, 400, 'name_required'],
+      [42, 400, 'name_required'],
+      ['', 400, 'name_required'],
+      ['    ', 400, 'name_required'],
+      ['A', 400, 'name_too_short'],
+      [' A ', 400, 'name_too_short'],
+      ['x'.repeat(61), 400, 'name_too_long'],
+      ['Bad\u0000Name', 400, 'invalid_name'],
+      ['Line\nBreak', 400, 'invalid_name'],
+      ['Tab\tName', 400, 'invalid_name'],
+      ['Zero\u200bWidth', 400, 'invalid_name'],
+    ];
+    for (const [name, status, error] of cases) {
+      const res = await add(tok.staff, { name });
+      expect([name, res.status, ((await res.json()) as { error: string }).error]).toEqual([name, status, error]);
+    }
+    expect((await add(tok.staff)).status).toBe(400); // no body at all
+    expect((await add(tok.staff, 'just a string')).status).toBe(400);
+    expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders').get()).toEqual({ n: 5 });
+    // Boundaries are fine.
+    expect((await add(tok.staff, { name: 'Jo' })).status).toBe(200);
+    expect((await add(tok.staff, { name: 'y'.repeat(60) })).status).toBe(200);
+    expect(cleanLeaderName('  Mary \u00a0 Ann  ')).toEqual({ name: 'Mary Ann' });
+  });
+
+  it('refuses a duplicate name (case-insensitive, whitespace-collapsed) with 409 name_taken and creates nothing', async () => {
+    for (const dupe of ['Plain Leader', 'plain leader', '  PLAIN   LEADER ', 'Staff Person']) {
+      const res = await add(tok.staff, { name: dupe });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'name_taken' });
+    }
+    expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders').get()).toEqual({ n: 5 });
+    expect((await add(tok.staff, { name: 'Dana Once' })).status).toBe(200);
+    expect((await add(tok.staff, { name: 'dana once' })).status).toBe(409);
+    expect((await add(tok.staff, { name: 'ÉLISE Ünal' })).status).toBe(200);
+    expect((await add(tok.staff, { name: 'élise ünal' })).status).toBe(409);
+  });
+
+  it('cannot create staff, owner or a ChMS-mapped row, whatever the body says', async () => {
+    const res = await add(tok.staff, { name: 'Wannabe Admin', isAdmin: true, is_admin: 1, isOwner: true, is_owner: 1, chmsId: 'L101', chmsIndividualId: 'L101', chms_individual_id: 'L103' });
+    expect(res.status).toBe(200);
+    const { url } = (await res.json()) as AddBody;
+    expect(rowByName('Wannabe Admin')).toMatchObject({ chms_individual_id: null, is_admin: 0, is_owner: 0 });
+    const body = (await (await call(me, '/api/me', url.split('/l/')[1]!)).json()) as { leader: { isAdmin: boolean }; admin?: unknown };
+    expect(body.leader.isAdmin).toBe(false);
+    expect(body.admin).toBeUndefined();
+    // The new person has no staff powers on any route.
+    const fresh = url.split('/l/')[1]!;
+    expect((await add(fresh, { name: 'Another One' })).status).toBe(403);
+    expect((await call(leaderLink, '/api/leader-link', fresh, { leaderId: id.leader })).status).toBe(403);
+  });
+
+  it(`shares the links rate limit: ${RATE_LIMITS.links.max} per window, then 429 with Retry-After`, async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-11-18T14:00:10Z'), toFake: ['Date'] });
+    try {
+      for (let i = 0; i < RATE_LIMITS.links.max; i++) expect((await add(tok.staff, { name: `Person Number ${i}` })).status).toBe(200);
+      const res = await add(tok.staff, { name: 'One Too Many' });
+      expect(res.status).toBe(429);
+      expect(await res.json()).toEqual({ error: 'rate_limited' });
+      expect(Number(res.headers.get('Retry-After'))).toBeGreaterThan(0);
+      // Same bucket as New link / Turn off link.
+      expect((await call(leaderLink, '/api/leader-link', tok.staff, { leaderId: id.leader })).status).toBe(429);
+      expect(t.sqlite.prepare('SELECT bucket, count FROM rate_limits WHERE leader_id = ?').all(id.staff)).toEqual([{ bucket: 'links', count: RATE_LIMITS.links.max + 2 }]);
+      // Non-staff are refused before they are counted.
+      expect((await add(tok.leader, { name: 'Nope Person' })).status).toBe(403);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -350,6 +350,24 @@ details.group > .list { padding: 4px 4px 8px; }
   -webkit-user-select: all;
 }
 
+/* ---------- add a leader (staff) ---------- */
+
+.add-form { display: grid; gap: 8px; }
+.field-label { font-weight: 600; font-size: 0.95rem; }
+.add-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.text-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 2px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.add-row .btn { flex: 0 0 auto; }
+
 /* ---------- small layout helpers (instead of style attributes, so the CSP needs no 'unsafe-inline') ---------- */
 
 .gap-top { margin-top: 8px; }

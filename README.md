@@ -98,7 +98,7 @@ Pushpay refresh tokens are single-use. If one is ever lost (a refresh response t
 
 ## Adding leaders and sending links
 
-The daily job creates a leader row for everyone it sees as an assignee or queue manager, but **without a link**. Staff (rows flagged `--admin`, which includes the owner) open the Team tab, find the leader under "Leader links" and tap **New link**: the link is shown once, with Copy and Email. Making a new link turns the old one off. **Turn off link** stops a link at once and removes that leader's notifications. Only the owner can change the owner's link, and nobody can turn off their own link from the app (make yourself a new one instead). Queue managers who are not staff see their queues' summary but have no link controls.
+The daily job creates a leader row for everyone it sees as an assignee or queue manager, but **without a link**. Staff (rows flagged `--admin`, which includes the owner) can also add someone who is not in ChMS yet from the Team tab: type their name under **Add a leader** and the app makes their row and first link (shown once, with Copy and Email). It never makes staff, and a name already on the list is refused (use **New link** on that row). Staff open the Team tab, find the leader under "Leader links" and tap **New link**: the link is shown once, with Copy and Email. Making a new link turns the old one off. **Turn off link** stops a link at once and removes that leader's notifications. Only the owner can change the owner's link, and nobody can turn off their own link from the app (make yourself a new one instead). Queue managers who are not staff see their queues' summary but have no link controls.
 
 From the command line (prints a link only when it makes one, and only once):
 

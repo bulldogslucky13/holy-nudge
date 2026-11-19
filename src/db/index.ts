@@ -47,6 +47,11 @@ export interface Store {
   leaderByToken(token: string): Promise<LeaderRow | null>;
   /** Store the hash of a freshly minted token: replaces any previous link and clears revoked_at. */
   setLinkTokenHash(leaderId: number, tokenHash: string): Promise<boolean>;
+  /**
+   * Insert a NON-staff leader (no ChMS id, not admin, not owner) with an already-hashed link, unless another
+   * leader has the same name (case-insensitive). Returns the new id, or null when the name is taken.
+   */
+  createLeader(name: string, tokenHash: string): Promise<number | null>;
   /** Turn the link off and delete the leader's push subscriptions. */
   revokeLink(leaderId: number, at: Date): Promise<boolean>;
   /** Record a visit, writing only if the stored value is older than minIntervalMs. */
@@ -164,6 +169,19 @@ export function createD1Store(db: D1Database): Store {
         .bind(leaderId, tokenHash)
         .run();
       return r.meta.changes === 1;
+    },
+
+    async createLeader(name, tokenHash) {
+      // One statement, so two quick taps cannot both pass the name check.
+      const r = await db
+        .prepare(
+          `INSERT INTO leaders (name, token_hash, is_admin, is_owner)
+           SELECT ?1, ?2, 0, 0 WHERE NOT EXISTS (SELECT 1 FROM leaders WHERE lower(name) = lower(?1))
+           RETURNING id`,
+        )
+        .bind(name, tokenHash)
+        .first<{ id: number }>();
+      return r?.id ?? null;
     },
 
     async revokeLink(leaderId, at) {
