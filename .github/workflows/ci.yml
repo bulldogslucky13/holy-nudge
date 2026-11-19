@@ -1,0 +1,52 @@
+name: CI
+
+# Pull requests: run tests and typecheck only (no secrets are used).
+# Pushes to main (including merged pull requests): test, then deploy to Cloudflare.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  deploy:
+    name: Deploy to Cloudflare
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    # One deploy at a time, in order; never cancel one halfway through.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Database first, so new code never runs against an older schema.
+      - name: Apply database migrations
+        run: npm run db:migrate:remote
+      - name: Deploy site (Pages)
+        run: npm run deploy -- --commit-dirty=true
+      - name: Deploy morning job (cron Worker)
+        run: npm run deploy:cron
