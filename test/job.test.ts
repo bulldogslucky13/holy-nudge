@@ -10,7 +10,8 @@ import { JobFailedError, alertReason, describeFailure, localHour, runDailyJob } 
 import { FakeSender, FakeStore } from './fakes';
 import { config, entry, person, queue, TEST_TOKEN_KEY } from './helpers';
 
-const cfg = config({ excludedQueues: ['Not Interested'] });
+// Live: the data source is injected below, and the pre-launch rules (fixture config) have their own tests.
+const cfg = config({ excludedQueues: ['Not Interested'], dataSource: 'pushpay' });
 const NOW = new Date('2026-01-15T14:00:00Z'); // 08:00 CST
 
 const lee = person('L1', 'Lee');
@@ -241,7 +242,7 @@ describe('daily job', () => {
     const store = new FakeStore();
     store.addLeader({ name: 'Owner', isAdmin: true, isOwner: true }, 1);
     const sender = new FakeSender();
-    const real = { ...cfg, excludedQueues: ['DONE- do not move here unless you have left a note', 'Not Interested'] };
+    const real = { ...cfg, dataSource: 'fixture' as const, excludedQueues: ['DONE- do not move here unless you have left a note', 'Not Interested'] };
     const out = await runDailyJob({ config: real, store, sender, dataSource: () => createDataSource(real, {} as never, NOW), now: NOW });
     expect(out.ran && out.summary.queues).toBe(10);
     expect(sender.sent.map((s) => s.payload.kind)).toEqual(['admin']);

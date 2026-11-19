@@ -137,12 +137,8 @@ describe('POST /api/leader-link and /api/leader-revoke', () => {
   });
 
   it('is staff only: a plain leader and an implicit queue-manager admin get 403', async () => {
-    // The manager really is an implicit admin (sees the admin view)...
-    const view = (await (await call(me, '/api/me', tok.manager)).json()) as { leader: { isAdmin: boolean }; admin?: Record<string, unknown> };
-    expect(view.leader.isAdmin).toBe(true);
-    expect(view.admin).toBeDefined();
-    expect('leaders' in view.admin!).toBe(false);
-    // ...but has no link powers.
+    // (An implicit admin's own view is covered in me.test.ts with live data; on the fixture, pre-launch,
+    // a non-staff manager gets no admin view at all: see test/prelaunch.test.ts.)
     for (const who of [tok.leader, tok.manager]) {
       for (const fn of [leaderLink, leaderRevoke]) {
         const res = await call(fn, '/api/x', who, { leaderId: id.legacy });
@@ -176,6 +172,33 @@ describe('POST /api/leader-link and /api/leader-revoke', () => {
     expect((await call(me, '/api/me', tok.staff)).status).toBe(200);
     for (const bad of [999, '3', -1, 1.5, null]) {
       expect((await call(leaderLink, '/api/leader-link', tok.staff, { leaderId: bad })).status).toBe(404);
+    }
+  });
+});
+
+describe('GET /api/me before real data is connected (fixture)', () => {
+  type MeBody = { leader: { name: string; isAdmin: boolean }; live: boolean; behind: unknown[]; admin?: unknown };
+  const get = async (token: string) => (await (await call(me, '/api/me', token)).json()) as MeBody;
+
+  it('non-staff rows mapped to a sample leader or sample queue manager get nothing: live false, empty behind, no admin', async () => {
+    for (const who of [tok.leader, tok.manager, tok.legacy]) {
+      const body = await get(who);
+      expect(body.live).toBe(false);
+      expect(body.behind).toEqual([]);
+      expect(body.leader.isAdmin).toBe(false);
+      expect('admin' in body).toBe(false);
+      expect(Object.keys(body).sort()).toEqual(['behind', 'generatedAt', 'leader', 'live']);
+    }
+    // Pre-launch callers do not make staff-style row creation happen either.
+    expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders').get()).toEqual({ n: 5 });
+  });
+
+  it('staff are unchanged: live false, sample data and the admin view', async () => {
+    for (const who of [tok.owner, tok.staff]) {
+      const body = await get(who);
+      expect(body.live).toBe(false);
+      expect(body.leader.isAdmin).toBe(true);
+      expect(body.admin).toBeDefined();
     }
   });
 });

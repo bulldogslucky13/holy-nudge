@@ -13,7 +13,12 @@
   var host = location.hostname;
   var isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
   var query = new URLSearchParams(location.search);
-  var mock = isLocal ? query.get('mock') : null; // leader | admin | invalid | empty (localhost only)
+  /* localhost only: leader | admin | invalid | empty, plus the pre-launch previews
+     (real data not connected yet): prelaunch (a non-staff leader, starts at onboarding; add &fake=1 to click through),
+     prelaunch-off (non-staff, notifications not on: the "finish setting up" screen),
+     prelaunch-done (non-staff, all set up: the "you're all set" screen), admin-sample (staff seeing sample data). */
+  var mock = isLocal ? query.get('mock') : null;
+  var mockPrelaunch = mock === 'prelaunch' || mock === 'prelaunch-off' || mock === 'prelaunch-done';
   var sim = isLocal ? query.get('sim') : null; // onboarding situation overrides, localhost only
   var fakeEnable = isLocal && query.get('fake') === '1'; // pretend the permission + subscribe step works
 
@@ -228,17 +233,19 @@
   ];
 
   function mockMe() {
-    var admin = mock === 'admin';
+    var admin = mock === 'admin' || mock === 'admin-sample';
     var items = [
       mockItem('e1', 'q3', 'Outreach Team', 'NOT_STARTED', '2026-11-10', 7, 'Pat Example', '405-555-0101'),
       mockItem('e2', 'q4', 'Bible Study Hosts & Events Team', 'IN_PROCESS', '2026-11-14', 3, 'Rowan Placeholder', '405-555-0102'),
       mockItem('e3', 'q3', 'Outreach Team', 'NOT_STARTED', '2026-11-25', null, 'Maple Sample-Longname-Hyphenated', null),
     ];
     var me = {
-      leader: { name: admin ? 'Quinn Adminson' : 'Sam Fakename', isAdmin: admin, notificationsOn: false },
-      behind: mock === 'empty' ? [] : items,
+      leader: { name: admin ? 'Quinn Adminson' : 'Sam Fakename', isAdmin: admin, notificationsOn: mock === 'prelaunch-done' },
+      live: !mockPrelaunch && mock !== 'admin-sample',
+      behind: mock === 'empty' || mockPrelaunch ? [] : items,
       generatedAt: new Date().toISOString(),
     };
+    if (mockPrelaunch) return me; // the server sends no sample data to non-staff before launch
     if (admin) {
       var stale = [
         mockItem('e10', 'q1', 'Connect Card Coordinators', 'NOT_STARTED', '2026-11-02', 15, 'Jules Nobody', '405-555-0110', { hoursWaiting: 360 }),
@@ -414,6 +421,10 @@
 
   function detectEnv() {
     var env = applySim(detectBase());
+    if (mock === 'prelaunch-done') {
+      env.supported = true; env.perm = 'granted'; env.subscribed = true;
+      return Promise.resolve(env);
+    }
     if (!env.supported || env.perm !== 'granted' || sim) return Promise.resolve(env);
     return withTimeout(navigator.serviceWorker.ready, 3000)
       .then(function (reg) {
@@ -440,6 +451,17 @@
     errorCode: null,
     minted: {}, // leader id -> URL just minted (memory only, shown once, gone on reload)
   };
+
+  /* Real data is not connected yet and this is not staff: there is no student list to show, only setup. */
+  function isPreLaunch() {
+    return !!S.me && S.me.live === false && !S.me.leader.isAdmin;
+  }
+
+  /* Notifications will reach this person: on this device, or (iPhone Safari tab) on their Home Screen app. */
+  function notificationsReady() {
+    if (S.env.subscribed) return true;
+    return S.env.ios && !S.env.standalone && S.me.leader.notificationsOn;
+  }
 
   function needsOnboarding() {
     if (S.skipped) return false;
@@ -576,7 +598,7 @@
           render();
         },
       },
-      'Not now, just show my list'
+      isPreLaunch() ? 'Not now, I’ll finish later' : 'Not now, just show my list'
     );
   }
 
@@ -633,7 +655,7 @@
           h('p', {}, env.ios && env.iosOld
             ? 'Notifications on iPhone need iOS 16.4 or later. You can update in Settings, General, Software Update.'
             : 'This browser can’t receive notifications, so we can’t nudge you here.'),
-          h('p', { class: 'muted' }, 'You can still use this page to see who’s waiting on you. For notifications, try Safari on an iPhone (added to the Home Screen), or Chrome, Edge or Firefox on a computer or Android phone.')
+          h('p', { class: 'muted' }, (isPreLaunch() ? '' : 'You can still use this page to see who’s waiting on you. ') + 'For notifications, try Safari on an iPhone (added to the Home Screen), or Chrome, Edge or Firefox on a computer or Android phone.')
         ),
       ];
     } else if (env.perm === 'denied') {
@@ -721,7 +743,8 @@
           S.env.perm = 'granted';
           S.env.subscribed = true;
           S.me.leader.notificationsOn = true;
-          S.view = 'success';
+          // Before launch the "you're all set" screen is the main screen (there is no list to go on to).
+          S.view = isPreLaunch() ? 'main' : 'success';
           render();
         });
       })
@@ -906,6 +929,7 @@
 
   function mainScreen() {
     var me = S.me;
+    if (isPreLaunch()) return preLaunchScreen();
     var parts = [];
 
     parts.push(
@@ -917,6 +941,11 @@
       )
     );
 
+    // Staff see sample students until real data is connected; say so, quietly.
+    if (me.live === false && me.leader.isAdmin) {
+      parts.push(h('p', { class: 'muted small gap-top gap-bottom' }, 'You’re seeing sample data. Real students will appear once ChMS is connected.'));
+    }
+
     if (me.admin) parts.push(tabBar());
 
     var tab = me.admin ? S.tab : 'mine';
@@ -927,6 +956,40 @@
 
     parts.push(footer());
     return h('div', {}, parts);
+  }
+
+  /* ---------------------------------------------------------------- before launch (non-staff) */
+
+  var CHECK_GLYPH =
+    '<svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+  /*
+   * Real data isn't connected yet, so there is no list to show and nothing has been checked.
+   * Either they're set up (nothing more to do, a test button), or we steer them back to setup.
+   */
+  function preLaunchScreen() {
+    if (!notificationsReady()) {
+      return h(
+        'div',
+        { class: 'screen' },
+        markImg(),
+        h('div', {}, h('h1', {}, 'Let’s finish setting up'), h('p', { class: 'lead gap-top' }, 'Notifications aren’t on yet, so we can’t send your morning nudge. It only takes a minute.')),
+        h('button', { class: 'btn primary big', type: 'button', onclick: function () { S.skipped = false; session('del', SKIP_KEY); S.view = 'onboarding'; render(); } }, 'Finish setting up')
+      );
+    }
+    var statusEl = h('p', { class: 'status-line', role: 'status' });
+    return h(
+      'div',
+      { class: 'screen' },
+      markImg(),
+      h('div', { class: 'done-mark' }, svg(CHECK_GLYPH)),
+      h('div', {}, h('h1', {}, 'You’re all set, ' + firstName(S.me.leader.name)), h('p', { class: 'lead gap-top' }, 'Notifications are on, and you’re set up. There’s nothing else you need to do right now.')),
+      h('div', { class: 'panel good' }, h('p', {}, 'When students are waiting on you, a morning notification will tell you how many.')),
+      h('p', { class: 'muted' }, 'Want to see what that looks like?'),
+      testButton(statusEl, 'primary big'),
+      statusEl,
+      h('p', { class: 'muted small center-text' }, 'Holy Nudge · a gentle push for Wildwood college ministry')
+    );
   }
 
   function tabBar() {
@@ -1217,8 +1280,10 @@
   /* ---------------------------------------------------------------- boot */
 
   function start() {
-    if (mock) token = 'mock-token';
-    else {
+    if (mock) {
+      token = 'mock-token';
+      if (mock === 'prelaunch-off') S.skipped = true; // preview the "finish setting up" screen directly
+    } else {
       pathToken = getPathToken();
       storedToken = store('get', TOKEN_KEY);
       token = pathToken || storedToken;

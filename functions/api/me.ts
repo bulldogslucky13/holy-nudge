@@ -1,12 +1,11 @@
 import { authenticate, apiError, json, rateLimit } from '../../src/api/http';
-import { buildMe, isAdminFor } from '../../src/api/me';
+import { resolveMe } from '../../src/api/me';
 import { createDataSource } from '../../src/chms/index';
 import { loadConfig } from '../../src/core/config';
-import { errorClassName } from '../../src/core/errors';
 import { HOUR_MS } from '../../src/core/time';
 import { createD1Store } from '../../src/db';
 import type { Env } from '../../src/env';
-import { loadSnapshot, peopleSeen, type Snapshot } from '../../src/job/load';
+import { loadSnapshot } from '../../src/job/load';
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   const store = createD1Store(env.DB);
@@ -22,23 +21,17 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   }
 
   const config = loadConfig();
-  let snapshot: Snapshot;
-  try {
-    snapshot = await loadSnapshot(createDataSource(config, env, now), config);
-  } catch (err) {
-    console.error(`api/me: data source failed (${errorClassName(err)})`);
+  const result = await resolveMe({
+    store,
+    config,
+    leader,
+    now,
+    // createDataSource inside the closure so a pre-launch caller never even builds a data source.
+    loadSnapshot: () => loadSnapshot(createDataSource(config, env, now), config),
+  });
+  if (!result.ok) {
+    console.error(`api/me: data source failed (${result.errorName})`);
     return apiError('chms_unavailable', 503);
   }
-
-  let leaders = [leader];
-  if (leader.isAdmin) {
-    // Staff manage everyone's link: make sure every leader in ChMS has a row (with no link yet)
-    // even before the first daily run.
-    await store.upsertLeaders(peopleSeen(snapshot));
-    leaders = await store.listLeaders();
-  } else if (isAdminFor(leader, config, snapshot, now)) {
-    // Queue-manager admins see notification status for their leaders; no link features.
-    leaders = await store.listLeaders();
-  }
-  return json(buildMe({ config, snapshot, leader, leaders, now }));
+  return json(result.me);
 };

@@ -179,6 +179,20 @@ a { color: var(--accent); }
 .status-line.err { color: var(--accent); font-weight: 600; }
 .status-line.ok { color: var(--ok); font-weight: 600; }
 
+/* ---------- before launch: "you're all set" ---------- */
+
+.done-mark {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--ok-soft);
+  color: var(--ok);
+  display: grid;
+  place-items: center;
+}
+.done-mark .glyph { width: 32px; height: 32px; }
+.center-text { text-align: center; }
+
 /* ---------- main header ---------- */
 
 .top {

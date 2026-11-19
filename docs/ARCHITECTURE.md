@@ -107,7 +107,7 @@ Security headers: `public/_headers` covers static files; Pages does not apply it
 
 ## Daily job
 
-Cron fires at 13:00 and 14:00 UTC; job proceeds only when the Central local hour equals `morningHour` (handles DST). One push per leader with behind count; one summary push per admin. On data-source error: record failed run and push an alert to admins flagged as owner.
+Cron fires at 13:00 and 14:00 UTC; job proceeds only when the Central local hour equals `morningHour` (handles DST). One push per leader with behind count; one summary push per admin. While `dataSource` is `fixture` (not live) only staff rows (`is_admin = 1`) are nudged: a non-staff row, even one that maps to a sample leader or queue manager, gets nothing, and a row with no `chms_individual_id` never gets a leader nudge (nudges are matched by ChMS id; only staff get the global admin summary). On data-source error: record failed run and push an alert to admins flagged as owner.
 
 ## Addendum: API contract and ownership (build phase 2)
 
@@ -130,6 +130,7 @@ All API errors: `{ "error": "<code>" }` with 4xx/5xx. Invalid, missing or turned
 ```json
 {
   "leader": { "name": "Sam Fakename", "isAdmin": false, "notificationsOn": true },
+  "live": true,
   "behind": [ {
     "entryId": "e1", "queueId": "q3", "queueName": "Outreach Team",
     "queueUrl": "https://.../", "status": "NOT_STARTED",
@@ -148,6 +149,8 @@ All API errors: `{ "error": "<code>" }` with 4xx/5xx. Invalid, missing or turned
   "generatedAt": "2026-11-17T14:00:00Z"
 }
 ```
+`live` is `true` when real church data is connected (`config.dataSource !== 'fixture'`), `false` while the app still runs on made-up sample data. **Pre-launch rule:** while `live` is `false`, a caller who is not staff (`is_admin` not set) always gets `behind: []` and no `admin` key, whatever their row maps to in the sample data, and the server does not load the sample snapshot for them at all (response keys are exactly `leader`, `live`, `behind`, `generatedAt`). Staff are unchanged (sample data and the admin view) and the client shows them a one-line "sample data" note. The client uses `live === false` with `leader.isAdmin === false` to show the setup-only flow: onboarding, then a "you're all set" screen with a test-notification button (or a "finish setting up" screen while notifications are not on). When `live` is `true` everything is as described below.
+
 `admin` is present only for admins. `admin.leaders` is present only for staff (`is_admin = 1`, which includes the owner): every leader row, sorted by name, never with a link or token. Implicit queue-manager admins get no `leaders` key and no link features. `canManage` is false on an owner's row unless the viewer is an owner. `byLeader` entries with `leader: null` are behind-but-unassigned. `daysOverdue` is null when not overdue (for example Not Started with a future due date). `due` is normalised to a `YYYY-MM-DD` Central date or null.
 
 - `GET /api/vapid-public-key` -> `{ "key": "<base64url>" }`

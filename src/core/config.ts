@@ -31,6 +31,14 @@ export function adminQueueUrl(
     .replaceAll('{statusId}', WEB_STATUS_ID[status]);
 }
 
+/**
+ * True once real church data is connected (anything but the made-up fixture). While false, only staff
+ * (is_admin) may see sample students or get sample-data nudges; everyone else is "pre-launch".
+ */
+export function isLive(config: Pick<HolyNudgeConfig, 'dataSource'>): boolean {
+  return config.dataSource !== 'fixture';
+}
+
 function fail(msg: string): never {
   throw new ConfigError(`holy-nudge.config.json: ${msg}`);
 }

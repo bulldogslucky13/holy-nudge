@@ -40,7 +40,7 @@ curl -X POST 'http://localhost:8787/run?force=1' -H "X-Job-Trigger-Key: <JOB_TRI
 npm test && npm run typecheck
 ```
 
-Open the printed `http://localhost:8788/l/<token>` link (printed once; run `add-leader` again with `--new-link` for another). Push needs real Google Chrome (or Safari/Firefox); Playwright's bundled Chromium cannot subscribe. On localhost, `?mock=leader` or `?mock=admin` shows the views with built-in sample data and no API.
+Open the printed `http://localhost:8788/l/<token>` link (printed once; run `add-leader` again with `--new-link` for another). Push needs real Google Chrome (or Safari/Firefox); Playwright's bundled Chromium cannot subscribe. On localhost, `?mock=leader` or `?mock=admin` shows the views with built-in sample data and no API. Before-launch (non-staff) previews: `?mock=prelaunch` (starts at onboarding; add `&fake=1` to click through to the finished screen), `?mock=prelaunch-off` (notifications not on: the "finish setting up" screen) and `?mock=prelaunch-done` (the "you're all set" screen). `?mock=admin-sample` shows staff with the "sample data" note. `&sim=ios-safari`, `&sim=denied` etc. still override the device situation.
 
 ## Deploy
 
@@ -108,7 +108,7 @@ npm run revoke-leader -- (--id <leader id> | --chms-id <ChMS id>) --remote
 npm run list-leaders -- [--stale-days 60] --remote      # no tokens; --stale-days lists links not used in N days
 ```
 
-`add-leader` on someone who already exists updates their name and raises flags but keeps their link, unless you pass `--new-link`. `--admin` makes them staff (whole-process view and link management); `--owner` adds failure alerts. While `dataSource` is `fixture`, `--chms-id` must be one of the sample ids in `fixtures/people.json`. Admin and owner rows keep the name you give them; other names follow ChMS.
+`add-leader` on someone who already exists updates their name and raises flags but keeps their link, unless you pass `--new-link`. `--admin` makes them staff (whole-process view and link management); `--owner` adds failure alerts. While `dataSource` is `fixture`, `--chms-id` may be left out (a real volunteer before launch) or must be one of the sample ids in `fixtures/people.json`; and only staff see sample data or get sample nudges. Everyone else is set up for notifications and sees a "you're all set" screen until real data is connected (`dataSource` is not `fixture`). Admin and owner rows keep the name you give them; other names follow ChMS.
 
 Email each leader their link once. On iPhone: open it in Safari, tap Share, then "Add to Home Screen", open Holy Nudge from the Home Screen, and tap "Turn on notifications" (iOS 16.4 or later). The app walks them through it. The link is the only key, so treat it like a password. If someone gets a new link, an iPhone Home Screen copy made from the old link stops working: they delete it and add the new link to the Home Screen again (the app on that phone tells them their link is not valid any more).
 

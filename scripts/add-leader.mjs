@@ -31,10 +31,12 @@ const chmsId = a['chms-id'] ?? null;
 const baseUrl = (a['base-url'] ?? (a.local ? LOCAL_BASE_URL : PROD_BASE_URL)).replace(/\/+$/, '');
 
 const config = JSON.parse(readFileSync(join(root, 'config/holy-nudge.config.json'), 'utf8'));
-if (config.dataSource === 'fixture') {
+if (config.dataSource === 'fixture' && chmsId) {
+  // --chms-id may be left out while on sample data (a real volunteer before launch has no sample identity;
+  // non-staff see no sample data then anyway). If given, it must be a sample id.
   const fakeIds = JSON.parse(readFileSync(join(root, 'fixtures/people.json'), 'utf8')).map((p) => p.id);
-  if (!chmsId || !fakeIds.includes(chmsId)) {
-    die(S, `dataSource is "fixture": --chms-id must be one of the sample leaders so they see sample data: ${fakeIds.join(', ')}`);
+  if (!fakeIds.includes(chmsId)) {
+    die(S, `dataSource is "fixture": --chms-id must be one of the sample ids (or left out): ${fakeIds.join(', ')}`);
   }
 }
 

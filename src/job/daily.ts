@@ -3,6 +3,7 @@ import { ChmsNotConfiguredError } from '../chms/oauth';
 import { IncompleteDataError } from '../chms/pushpay';
 import { ReauthorizationRequired, TokenPersistError } from '../chms/tokens';
 import { computeNudges } from '../core/behind';
+import { isLive } from '../core/config';
 import { errorClassName } from '../core/errors';
 import type { DataSource, HolyNudgeConfig } from '../core/types';
 import type { JobRunSummary, LeaderRow, Store } from '../db';
@@ -85,9 +86,15 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     let leadersNudged = 0;
     let adminsNudged = 0;
 
+    // Until real data is connected, everything computed above is about made-up sample students. Only
+    // staff (is_admin) may be nudged about it; a real volunteer whose row happens to map to a sample
+    // leader or queue manager must never get "3 students are waiting on you".
+    const live = isLive(config);
+
     for (const l of nudges.leaders) {
       const row = byChms.get(l.leader.id);
       if (!row || l.behind.length === 0) continue;
+      if (!live && !row.isAdmin) continue;
       const r = await deliverToLeader(store, sender, row.id, leaderPayload(l.behind.length), now);
       delivery = addCounts(delivery, r);
       if (r.sent > 0) leadersNudged++;
@@ -99,7 +106,9 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     for (const row of rows) if (row.isAdmin) summaries.set(row.id, { row, counts: globalCounts });
     for (const a of nudges.admins) {
       const row = byChms.get(a.adminId);
-      if (row && !summaries.has(row.id)) summaries.set(row.id, { row, counts: adminCounts(a) });
+      if (!row || summaries.has(row.id)) continue;
+      if (!live && !row.isAdmin) continue;
+      summaries.set(row.id, { row, counts: adminCounts(a) });
     }
     for (const { row, counts } of summaries.values()) {
       if (counts.waiting === 0) continue; // nothing to nudge about
