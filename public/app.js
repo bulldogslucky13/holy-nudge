@@ -463,6 +463,7 @@
     minted: {}, // leader id -> URL just minted (memory only, shown once, gone on reload)
     justAdded: null, // id of the leader staff just added: their new-link panel shows under the add form
     addName: '', // what is typed in the add form (survives a re-render)
+    addOpen: false, // add form is tucked behind an "Add a leader" button until tapped
   };
 
   /* Real data is not connected yet and this is not staff: there is no student list to show, only setup. */
@@ -1191,6 +1192,7 @@
           S.minted[row.id] = res.url;
           S.justAdded = row.id;
           S.addName = '';
+          S.addOpen = false;
           renderInPlace();
         })
         .catch(function (e) {
@@ -1205,13 +1207,30 @@
 
     var added = S.justAdded === null ? null : leaders.filter(function (l) { return l.id === S.justAdded; })[0];
     var url = added ? S.minted[added.id] : null;
+
+    // Tucked away until asked for: a small button, then the form. A just-made link stays visible until Done.
+    if (!S.addOpen) {
+      var openBtn = h('button', { class: 'btn small-btn', type: 'button', onclick: function () {
+        S.addOpen = true;
+        renderInPlace();
+        var el = document.getElementById('add-leader-name');
+        if (el) el.focus();
+      } }, 'Add a leader');
+      return h('div', { class: 'add-closed' }, openBtn, added && url ? h('div', { class: 'panel' }, mintedPanel(added, url)) : null);
+    }
+
+    var cancelBtn = h('button', { class: 'btn link', type: 'button', onclick: function () {
+      S.addOpen = false;
+      S.addName = '';
+      renderInPlace();
+    } }, 'Cancel');
+    form.querySelector('.add-row').appendChild(cancelBtn);
     return h(
       'div',
       { class: 'panel' },
       h('h3', {}, 'Add a leader'),
       h('p', { class: 'muted small' }, 'For someone who isn’t in ChMS yet. We’ll make them a personal link. Send it to them: they open it on their phone and follow the steps.'),
-      form,
-      added && url ? mintedPanel(added, url) : null
+      form
     );
   }
 

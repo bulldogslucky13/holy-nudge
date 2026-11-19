@@ -352,6 +352,8 @@ details.group > .list { padding: 4px 4px 8px; }
 
 /* ---------- add a leader (staff) ---------- */
 
+.add-closed { display: grid; gap: 12px; justify-items: start; margin: 4px 0 12px; }
+.add-closed .panel { justify-self: stretch; }
 .add-form { display: grid; gap: 8px; }
 .field-label { font-weight: 600; font-size: 0.95rem; }
 .add-row { display: flex; flex-wrap: wrap; gap: 8px; }
