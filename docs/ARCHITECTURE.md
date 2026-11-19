@@ -66,9 +66,9 @@ The live implementation maps Pushpay responses into these types; nothing outside
 - `isBehind(entry, now, tz)`: `status === NOT_STARTED`, OR (`status !== DONE` AND due date has passed).
 - "Due date has passed" = the due calendar date is strictly before today's calendar date in the configured time zone (`America/Chicago`). Due today is not behind. A due value with a time component is converted to a Central calendar date first.
 - `WAITING` with a future (or today's) due date is not behind. `DONE` is never behind. Null due + not `NOT_STARTED` is not behind.
-- `isStaleUnassigned(entry, now, tz)`: `assignee === null`, status not `DONE`, and `created` more than 24 hours before `now` (elapsed time, not calendar days). The Pushpay guide shows `created` (and `due`) as date-only values: a date-only `created` is taken as the end of that calendar day in the configured zone (the next local midnight), so it never flags early. A `created` datetime with no offset is Central wall time; one with an offset is exact.
+- `isUnassigned(entry)`: `assignee === null` and status not `DONE`, however recently they arrived. This is the Unassigned list and count (it used to hide students younger than 24 hours; it no longer does, so a first-morning push never points at an empty tab). When it is worth a push is a separate rule: see "When the push fires" below.
 - Excluded queues (config, by queue id and/or exact name) are dropped before any rule runs.
-- Output of the job computation: per leader (assignee id) list of behind entries; per admin: stale-unassigned entries plus behind entries grouped by leader, for the queues they administer. Admins for a queue = config mapping, defaulting to that queue's managers.
+- Output of the job computation: per leader (assignee id) list of behind entries; per admin: unassigned entries plus behind entries grouped by leader, for the queues they administer. Admins for a queue = config mapping, defaulting to that queue's managers.
 
 ## Config (`config/holy-nudge.config.json`)
 
@@ -142,7 +142,7 @@ All API errors: `{ "error": "<code>" }` with 4xx/5xx. Invalid, missing or turned
     "individual": { "name": "Pat Example", "phone": "405-555-0101" }
   } ],
   "admin": {
-    "staleUnassigned": [ { "...item fields": "", "hoursWaiting": 60 } ],
+    "unassigned": [ { "...item fields": "", "hoursWaiting": 60 } ],
     "byLeader": [ { "leader": { "name": "Sam Fakename" }, "notificationsOn": false, "items": [ ] } ],
     "leadersWithoutNotifications": [ { "name": "Sam Fakename" } ],
     "leaders": [ {

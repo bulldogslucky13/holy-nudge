@@ -60,7 +60,7 @@ describe('fixture source', () => {
     expect(r.admins.map((a) => a.adminId).sort()).toEqual(['M201', 'M202']);
     const adminBehind = r.admins.flatMap((a) => a.behindByLeader.flatMap((g) => g.entries));
     expect(adminBehind).toHaveLength(expectedBehind.length); // each queue has exactly one admin
-    expect(r.admins.flatMap((a) => a.staleUnassigned).length).toBeGreaterThan(3);
+    expect(r.admins.flatMap((a) => a.unassigned).length).toBeGreaterThan(3);
     // Nothing from the parking queues leaks through.
     expect(adminBehind.some((e) => parking.has(e.queueId))).toBe(false);
   });

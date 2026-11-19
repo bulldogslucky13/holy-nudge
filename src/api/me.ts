@@ -20,7 +20,8 @@ export interface ItemJson {
   individual: { name: string; phone: string | null };
 }
 
-export interface StaleItemJson extends ItemJson {
+export interface UnassignedItemJson extends ItemJson {
+  /** Whole hours since `created` (0 for a date-only `created` of today). */
   hoursWaiting: number;
 }
 
@@ -55,7 +56,8 @@ export interface MeJson {
   live: boolean;
   behind: ItemJson[];
   admin?: {
-    staleUnassigned: StaleItemJson[];
+    /** Every unassigned, not-Done student in the admin's queues, longest waiting first. */
+    unassigned: UnassignedItemJson[];
     byLeader: { leader: { name: string } | null; notificationsOn: boolean; items: ItemJson[] }[];
     leadersWithoutNotifications: { name: string }[];
     /** Staff only (leaders flagged is_admin). Implicit queue admins never get this key. */
@@ -178,8 +180,9 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
     const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
 
     out.admin = {
-      staleUnassigned: adminView.staleUnassigned
-        .map((e) => ({ ...adminItem(e), hoursWaiting: Math.floor((now.getTime() - createdToInstant(e.created, tz)) / HOUR_MS) }))
+      unassigned: adminView.unassigned
+        // A date-only `created` counts from the end of its day, so today's arrivals would be negative.
+        .map((e) => ({ ...adminItem(e), hoursWaiting: Math.max(0, Math.floor((now.getTime() - createdToInstant(e.created, tz)) / HOUR_MS)) }))
         .sort((a, b) => b.hoursWaiting - a.hoursWaiting || a.entryId.localeCompare(b.entryId)),
       byLeader: adminView.behindByLeader.map((g) => ({
         leader: g.leader ? { name: g.leader.name } : null,

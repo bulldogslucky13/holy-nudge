@@ -379,7 +379,7 @@ describe('GET /api/me privacy contract', () => {
     const text = JSON.stringify(owner);
     expect(text).not.toMatch(/email|@example\.com/);
     expect(text).not.toMatch(/\/l\/|token/i);
-    const items = [...owner.behind, ...owner.admin.staleUnassigned, ...owner.admin.byLeader.flatMap((g: any) => g.items)];
+    const items = [...owner.behind, ...owner.admin.unassigned, ...owner.admin.byLeader.flatMap((g: any) => g.items)];
     expect(items.length).toBeGreaterThan(0);
     for (const i of items) expect(Object.keys(i.individual).sort()).toEqual(['name', 'phone']);
     expect(owner.admin.leaders.map((l: any) => Object.keys(l).sort())[0]).toEqual(

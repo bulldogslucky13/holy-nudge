@@ -56,11 +56,11 @@ const GLOBAL_ADMIN = '\u0000all';
 export function globalAdminView(s: Snapshot, config: HolyNudgeConfig, now: Date): AdminResult {
   const adminsByQueue = Object.fromEntries(s.queues.map((q) => [q.id, [GLOBAL_ADMIN]]));
   const r = computeNudges(s.queues, s.entries, { ...config, adminsByQueue }, now).admins.find((a) => a.adminId === GLOBAL_ADMIN);
-  return r ?? { adminId: GLOBAL_ADMIN, name: null, queueIds: [], staleUnassigned: [], behindByLeader: [] };
+  return r ?? { adminId: GLOBAL_ADMIN, name: null, queueIds: [], unassigned: [], behindByLeader: [] };
 }
 
 export interface AdminCounts {
-  /** Distinct students who are behind or stale-unassigned. */
+  /** Distinct students who are behind or unassigned. */
   waiting: number;
   /** Leaders with at least one behind student. */
   leaders: number;
@@ -68,10 +68,10 @@ export interface AdminCounts {
   unassigned: number;
 }
 
-export function adminCounts(a: { staleUnassigned: QueueEntry[]; behindByLeader: BehindGroup[] }): AdminCounts {
+export function adminCounts(a: { unassigned: QueueEntry[]; behindByLeader: BehindGroup[] }): AdminCounts {
   const waiting = new Set<string>();
   const unassigned = new Set<string>();
-  for (const e of [...a.staleUnassigned, ...a.behindByLeader.flatMap((g) => g.entries)]) {
+  for (const e of [...a.unassigned, ...a.behindByLeader.flatMap((g) => g.entries)]) {
     waiting.add(e.id);
     if (!e.assignee) unassigned.add(e.id);
   }

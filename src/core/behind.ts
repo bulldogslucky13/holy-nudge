@@ -1,6 +1,6 @@
-// The heart of Holy Nudge: who is behind, who is stale-unassigned, and who gets told.
+// The heart of Holy Nudge: who is behind, who is waiting for a leader, and who gets told.
 // Pure functions. `now` is always passed in.
-import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from './time';
+import { dueToDate, zonedDate } from './time';
 import type { HolyNudgeConfig, Person, Queue, QueueEntry } from './types';
 
 /** NOT_STARTED, or (not DONE and the due calendar date is before today's date in `tz`). */
@@ -12,12 +12,11 @@ export function isBehind(entry: QueueEntry, now: Date, tz: string): boolean {
 }
 
 /**
- * Unassigned, not DONE, and created more than 24 elapsed hours before `now`.
- * A date-only `created` counts from the end of that calendar day in `tz`, so it never flags early.
+ * Waiting for a leader: nobody assigned and not DONE, however recently they arrived. This is the
+ * Unassigned list and count; when it is worth a push is decided separately (see the nudge triggers).
  */
-export function isStaleUnassigned(entry: QueueEntry, now: Date, tz: string): boolean {
-  if (entry.assignee !== null || entry.status === 'DONE') return false;
-  return now.getTime() - createdToInstant(entry.created, tz) > 24 * HOUR_MS;
+export function isUnassigned(entry: QueueEntry): boolean {
+  return entry.assignee === null && entry.status !== 'DONE';
 }
 
 /** Drop queues whose id or exact name is listed in config.excludedQueues. */
@@ -49,7 +48,8 @@ export interface AdminResult {
   /** Known from queue managers or assignees; null if the id appears only in config. */
   name: string | null;
   queueIds: string[];
-  staleUnassigned: QueueEntry[];
+  /** Every unassigned, not-DONE entry in the admin's queues. */
+  unassigned: QueueEntry[];
   behindByLeader: BehindGroup[];
 }
 
@@ -122,7 +122,7 @@ export function computeNudges(
         adminId,
         name: adminNames.get(adminId) ?? null,
         queueIds: [...qset],
-        staleUnassigned: active.filter((e) => inScope(e) && isStaleUnassigned(e, now, tz)),
+        unassigned: active.filter((e) => inScope(e) && isUnassigned(e)),
         behindByLeader,
       };
     });

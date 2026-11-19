@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeNudges, isBehind, isStaleUnassigned } from '../src/core/behind';
+import { computeNudges, isBehind, isUnassigned } from '../src/core/behind';
 import type { Status } from '../src/core/types';
 import { TZ, config, entry, person, queue } from './helpers';
 
@@ -95,74 +95,16 @@ describe('isBehind: due formats', () => {
   });
 });
 
-describe('isStaleUnassigned', () => {
-  const created = '2026-06-10T12:00:00Z';
-  const c = new Date(created).getTime();
-  const min = 60 * 1000;
-  const stale = (over: Parameters<typeof entry>[0], nowMs: number) =>
-    isStaleUnassigned(entry({ assignee: null, created, ...over }), new Date(nowMs), TZ);
-
-  it('23h59m is not stale, 24h01m is', () => {
-    expect(stale({}, c + 24 * 60 * min - min)).toBe(false);
-    expect(stale({}, c + 24 * 60 * min + min)).toBe(true);
+describe('isUnassigned (the Unassigned list)', () => {
+  it('is every not-DONE entry with nobody assigned, however recently it arrived', () => {
+    expect(isUnassigned(entry({ assignee: null, status: 'NOT_STARTED' }))).toBe(true);
+    expect(isUnassigned(entry({ assignee: null, status: 'IN_PROCESS' }))).toBe(true);
+    expect(isUnassigned(entry({ assignee: null, status: 'WAITING' }))).toBe(true);
+    expect(isUnassigned(entry({ assignee: null, status: 'NOT_STARTED', created: '2099-01-01' }))).toBe(true);
   });
-  it('exactly 24h is not stale ("more than")', () => {
-    expect(stale({}, c + 24 * 60 * min)).toBe(false);
-  });
-  it('assigned or DONE is never stale-unassigned', () => {
-    const now = c + 100 * 60 * min;
-    expect(stale({ assignee: person('L1') }, now)).toBe(false);
-    expect(stale({ status: 'DONE' }, now)).toBe(false);
-    expect(stale({ status: 'NOT_STARTED' }, now)).toBe(true);
-    expect(stale({ status: 'WAITING' }, now)).toBe(true);
-  });
-  it('uses elapsed time across spring-forward (wall-clock day later, only 23h elapsed)', () => {
-    const createdLocal = '2026-03-07T12:00:00-06:00'; // noon CST Mar 7
-    const e = entry({ assignee: null, created: createdLocal });
-    expect(isStaleUnassigned(e, new Date('2026-03-08T12:00:00-05:00'), TZ)).toBe(false); // 23h elapsed
-    expect(isStaleUnassigned(e, new Date('2026-03-08T12:59:00-05:00'), TZ)).toBe(false); // 23h59m
-    expect(isStaleUnassigned(e, new Date('2026-03-08T13:01:00-05:00'), TZ)).toBe(true); // 24h01m
-  });
-  it('uses elapsed time across fall-back (25h of wall clock is still just 24h elapsed at the edge)', () => {
-    const createdLocal = '2026-10-31T12:00:00-05:00'; // noon CDT Oct 31
-    const e = entry({ assignee: null, created: createdLocal });
-    expect(isStaleUnassigned(e, new Date('2026-11-01T10:59:00-06:00'), TZ)).toBe(false); // 23h59m
-    expect(isStaleUnassigned(e, new Date('2026-11-01T11:01:00-06:00'), TZ)).toBe(true); // 24h01m
-  });
-
-  describe('date-only created (Pushpay guide shows "YYYY-MM-DD") counts from the end of that Central day', () => {
-    const e = entry({ assignee: null, created: '2026-01-14' }); // ends at 2026-01-15 00:00 CST = 06:00Z
-    it('is not stale during the day it was created, nor the whole next day', () => {
-      expect(isStaleUnassigned(e, new Date('2026-01-14T23:30:00-06:00'), TZ)).toBe(false);
-      expect(isStaleUnassigned(e, new Date('2026-01-15T08:00:00-06:00'), TZ)).toBe(false); // next morning: would be 38h from UTC midnight
-      expect(isStaleUnassigned(e, new Date('2026-01-15T23:59:00-06:00'), TZ)).toBe(false);
-      expect(isStaleUnassigned(e, new Date('2026-01-16T00:00:00-06:00'), TZ)).toBe(false); // exactly 24h
-    });
-    it('is stale just after the following midnight', () => {
-      expect(isStaleUnassigned(e, new Date('2026-01-16T00:01:00-06:00'), TZ)).toBe(true);
-      expect(isStaleUnassigned(e, new Date('2026-01-16T08:00:00-06:00'), TZ)).toBe(true);
-    });
-    it('uses the Central day, not the UTC day, in summer (CDT)', () => {
-      const s = entry({ assignee: null, created: '2026-07-01' }); // ends 2026-07-02 00:00 CDT = 05:00Z
-      expect(isStaleUnassigned(s, new Date('2026-07-03T04:59:00Z'), TZ)).toBe(false); // 23:59 CDT Jul 2
-      expect(isStaleUnassigned(s, new Date('2026-07-03T05:01:00Z'), TZ)).toBe(true);
-    });
-    it('handles a created day that ends on a DST change', () => {
-      // Mar 7 ends at Mar 8 00:00 CST (06:00Z); 24h later is 06:00Z Mar 9 = 01:00 CDT Mar 9.
-      const s = entry({ assignee: null, created: '2026-03-07' });
-      expect(isStaleUnassigned(s, new Date('2026-03-09T05:59:00Z'), TZ)).toBe(false);
-      expect(isStaleUnassigned(s, new Date('2026-03-09T06:01:00Z'), TZ)).toBe(true);
-    });
-  });
-
-  it('takes a datetime with no offset as Central wall time', () => {
-    const e = entry({ assignee: null, created: '2026-01-14 09:00:00' }); // 15:00Z
-    expect(isStaleUnassigned(e, new Date('2026-01-15T14:59:00Z'), TZ)).toBe(false);
-    expect(isStaleUnassigned(e, new Date('2026-01-15T15:01:00Z'), TZ)).toBe(true);
-  });
-
-  it('rejects an unparseable created value', () => {
-    expect(() => isStaleUnassigned(entry({ assignee: null, created: 'soon' }), new Date(), TZ)).toThrow(RangeError);
+  it('assigned or DONE is never unassigned', () => {
+    expect(isUnassigned(entry({ assignee: person('L1') }))).toBe(false);
+    expect(isUnassigned(entry({ assignee: null, status: 'DONE' }))).toBe(false);
   });
 });
 
@@ -213,8 +155,8 @@ describe('computeNudges', () => {
       ['L1', ['3']],
       [null, ['4']],
     ]);
-    expect(m2r.staleUnassigned.map((x) => x.id)).toEqual(['4']);
-    expect(m1r.staleUnassigned).toEqual([]);
+    expect(m2r.unassigned.map((x) => x.id)).toEqual(['4']);
+    expect(m1r.unassigned).toEqual([]);
   });
   it('config mapping overrides managers (by name or id); empty mapping falls back', () => {
     const cfg = config({ adminsByQueue: { Alpha: ['X9', 'M2'], B: [] } });
@@ -231,7 +173,7 @@ describe('computeNudges', () => {
     const r = computeNudges([qA], [e('2', 'A', { status: 'DONE' })], config(), NOON);
     expect(r.leaders).toEqual([]);
     expect(r.admins).toEqual([
-      { adminId: 'M1', name: 'Mgr One', queueIds: ['A'], staleUnassigned: [], behindByLeader: [] },
+      { adminId: 'M1', name: 'Mgr One', queueIds: ['A'], unassigned: [], behindByLeader: [] },
     ]);
   });
 });
