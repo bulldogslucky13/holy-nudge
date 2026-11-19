@@ -13,7 +13,7 @@ import { config } from './helpers';
 
 const NOW = new Date('2026-01-15T14:00:00Z'); // 08:00 CST
 const row = (over: Partial<LeaderRow>): LeaderRow => ({
-  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, ...over,
+  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, coordinatorOf: [], ...over,
 });
 
 const fixtureCfg = loadConfig(); // the bundled config; asserted below to be the fixture one
@@ -54,10 +54,12 @@ describe('/api/me while not live', () => {
     };
     let sawBehind = 0;
     for (const [chmsId, name] of people) {
-      const leader = row({ chmsIndividualId: chmsId, name, subscriptionCount: 1 });
-      // Control: with live data this very row would see students (leaders) or an admin view (managers).
+      // Each also marked as a coordinator: that must not open the sample data either.
+      const leader = row({ chmsIndividualId: chmsId, name, subscriptionCount: 1, coordinatorOf: ['Service Team'] });
+      // Control: with live data this very row would see students (leaders) and a coordinator view.
       const live = buildMe({ config: liveCfg, snapshot: snap, leader, leaders: [leader], now: NOW });
-      if (live.behind.length > 0 || live.admin) sawBehind++;
+      expect(live.admin).toBeDefined();
+      if (live.behind.length > 0) sawBehind++;
 
       const r = await resolveMe({ store, config: fixtureCfg, leader, now: NOW, loadSnapshot: loader });
       expect(r.ok).toBe(true);
@@ -80,7 +82,7 @@ describe('/api/me while not live', () => {
   it('buildMe itself refuses to show sample data to non-staff, even when handed a full snapshot', async () => {
     const snap = await ids();
     const manager = snap.queues.flatMap((q) => q.managers)[0]!;
-    const me = buildMe({ config: fixtureCfg, snapshot: snap, leader: row({ chmsIndividualId: manager.id }), leaders: [], now: NOW });
+    const me = buildMe({ config: fixtureCfg, snapshot: snap, leader: row({ chmsIndividualId: manager.id, coordinatorOf: ['3', 'Service Team'] }), leaders: [], now: NOW });
     expect(me.behind).toEqual([]);
     expect(me.admin).toBeUndefined();
     expect(me.live).toBe(false);
@@ -103,15 +105,20 @@ describe('/api/me while not live', () => {
     expect(r.ok && r.me.admin?.leaders?.length).toBeGreaterThan(5);
   });
 
-  it('when live, non-staff are exactly as before: live true, their own list, implicit admin view', async () => {
+  it('when live, non-staff are exactly as before: live true, their own list; a whole-queue view only as a marked coordinator', async () => {
     const snap = await ids();
     const manager = snap.queues.flatMap((q) => q.managers)[0]!;
     const store = new FakeStore();
     const m = store.addLeader({ name: manager.name, chmsIndividualId: manager.id });
     const r = await resolveMe({ store, config: liveCfg, leader: (await store.leaderById(m))!, now: NOW, loadSnapshot: async () => snap });
     expect(r.ok && r.me.live).toBe(true);
-    expect(r.ok && r.me.leader.isAdmin).toBe(true);
-    expect(r.ok && r.me.admin).toBeDefined();
+    // A Lead queue manager, not marked: no whole-queue view.
+    expect(r.ok && r.me.leader.isAdmin).toBe(false);
+    expect(r.ok && 'admin' in r.me).toBe(false);
+    store.leaders.find((l) => l.id === m)!.coordinatorOf = ['Connect Card Coordinators'];
+    const c = await resolveMe({ store, config: liveCfg, leader: (await store.leaderById(m))!, now: NOW, loadSnapshot: async () => snap });
+    expect(c.ok && c.me.leader.isAdmin).toBe(true);
+    expect(c.ok && c.me.admin).toBeDefined();
   });
 
   it('a data-source failure for staff is reported by class name only', async () => {
@@ -146,9 +153,10 @@ describe('daily job while not live', () => {
     const store = new FakeStore();
     const sender = new FakeSender();
     // A real volunteer row with no ChMS id, with a device.
-    const noId = store.addLeader({ name: 'Real Volunteer' }, 1);
+    const noId = store.addLeader({ name: 'Real Volunteer', coordinatorOf: ['Connect Card Coordinators'] }, 1);
     // Non-staff rows that happen to map to every sample leader and queue manager, each with a device.
-    const mapped = [...people].map(([chmsIndividualId, name]) => store.addLeader({ chmsIndividualId, name }, 1));
+    // Each also marked as a coordinator: before launch that must not send them anything either.
+    const mapped = [...people].map(([chmsIndividualId, name]) => store.addLeader({ chmsIndividualId, name, coordinatorOf: ['Service Team'] }, 1));
     // Staff: one with no ChMS id (global admin summary), one mapped to a sample leader (also gets the leader nudge).
     const staffPlain = store.addLeader({ name: 'Staffer', isAdmin: true }, 1);
     const [firstId, firstName] = [...people][0]!;
@@ -181,7 +189,7 @@ describe('daily job while not live', () => {
     const people = await sampleLeadersAndManagers();
     const store = new FakeStore();
     const sender = new FakeSender();
-    for (const [chmsIndividualId, name] of people) store.addLeader({ chmsIndividualId, name }, 1);
+    for (const [chmsIndividualId, name] of people) store.addLeader({ chmsIndividualId, name, coordinatorOf: ['Connect Card Coordinators', 'Service Team'] }, 1);
     // The fixture source is still used for the data; only the config's liveness differs.
     await runDailyJob({
       config: { ...cfg, dataSource: 'pushpay' },

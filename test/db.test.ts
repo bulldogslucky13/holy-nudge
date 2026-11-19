@@ -3,7 +3,7 @@ import { createD1Store, hashToken } from '../src/db';
 import { readText } from './files';
 import { createTestD1 } from './sqlite-d1';
 
-const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql'];
+const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql', 'migrations/0005_queue_coordinators.sql'];
 
 describe('D1 store: upsertLeaders', () => {
   it('adds unknown people WITHOUT a link, renames plain leaders, and keeps hand-given admin/owner names and links', async () => {
@@ -77,9 +77,53 @@ describe('migration 0004 (Lead match by hand)', () => {
     expect(t.sqlite.prepare('SELECT * FROM push_subscriptions ORDER BY id').all()).toEqual(before.subs);
     expect(t.sqlite.prepare('SELECT * FROM rate_limits').all()).toEqual(before.rate);
     expect(t.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-    // The store reads it, and the owner's legacy link still works.
+    // The store reads it (with 0005 applied, which it needs), and the owner's legacy link still works.
+    t.sqlite.exec(await readText('migrations/0005_queue_coordinators.sql'));
     const store = createD1Store(t.db);
     expect(await store.leaderByToken('legacy-owner-token-0123456789')).toMatchObject({ id: 1, isOwner: true, matchByHand: false, subscriptionCount: 1 });
+  });
+});
+
+describe('migration 0005 (queue coordinators)', () => {
+  it('adds an empty table and changes no existing row; nobody coordinates anything until rows are added', async () => {
+    const t = await createTestD1('migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql');
+    t.sqlite.exec(
+      "INSERT INTO leaders (id, chms_individual_id, name, token_hash, is_admin, is_owner) VALUES (1, 'L104', 'Owner', 'h1', 1, 1), (2, 'M201', 'Mgr Fakely', 'h2', 0, 0);" +
+        "INSERT INTO push_subscriptions (id, leader_id, endpoint, p256dh, auth) VALUES (7, 2, 'https://web.push.apple.com/m', 'k', 'a');",
+    );
+    const before = { leaders: t.sqlite.prepare('SELECT * FROM leaders ORDER BY id').all(), subs: t.sqlite.prepare('SELECT * FROM push_subscriptions').all() };
+    t.sqlite.exec(await readText('migrations/0005_queue_coordinators.sql'));
+    expect(t.sqlite.prepare('SELECT * FROM leaders ORDER BY id').all()).toEqual(before.leaders);
+    expect(t.sqlite.prepare('SELECT * FROM push_subscriptions').all()).toEqual(before.subs);
+    expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM queue_coordinators').get()).toEqual({ n: 0 });
+    const store = createD1Store(t.db);
+    expect((await store.listLeaders()).map((l) => l.coordinatorOf)).toEqual([[], []]);
+  });
+
+  it('the store reads each row\'s keys (sorted); a row cannot hold the same key twice or a blank key, or point at no leader', async () => {
+    const t = await createTestD1(...MIGRATIONS);
+    t.sqlite.exec(
+      "INSERT INTO leaders (id, name, token_hash) VALUES (1, 'Casey Coordly', 'h1'), (2, 'Plain Leaderson', 'h2');" +
+        "INSERT INTO queue_coordinators (leader_id, queue_key) VALUES (1, 'Service Team'), (1, '4'), (1, 'Queue \"quoted\", with comma');",
+    );
+    const store = createD1Store(t.db);
+    const by = Object.fromEntries((await store.listLeaders()).map((l) => [l.id, l.coordinatorOf]));
+    expect(by).toEqual({ 1: ['4', 'Queue "quoted", with comma', 'Service Team'], 2: [] });
+    expect((await store.leaderById(1))?.coordinatorOf).toHaveLength(3);
+    expect(() => t.sqlite.exec("INSERT INTO queue_coordinators (leader_id, queue_key) VALUES (1, 'Service Team')")).toThrow(/UNIQUE|PRIMARY/);
+    expect(() => t.sqlite.exec("INSERT INTO queue_coordinators (leader_id, queue_key) VALUES (1, '  ')")).toThrow(/CHECK/);
+    expect(() => t.sqlite.exec("INSERT INTO queue_coordinators (leader_id, queue_key) VALUES (99, 'Service Team')")).toThrow(/FOREIGN KEY/);
+  });
+
+  it('removing a leader removes their coordinator rows (and nobody else\'s)', async () => {
+    const t = await createTestD1(...MIGRATIONS);
+    t.sqlite.exec(
+      "INSERT INTO leaders (id, name, token_hash) VALUES (1, 'Casey Coordly', 'h1'), (2, 'Dana Coordwell', 'h2');" +
+        "INSERT INTO queue_coordinators (leader_id, queue_key) VALUES (1, 'Service Team'), (2, 'Outreach Team');",
+    );
+    t.sqlite.exec('DELETE FROM leaders WHERE id = 1');
+    expect(t.sqlite.prepare('SELECT leader_id, queue_key FROM queue_coordinators').all()).toEqual([{ leader_id: 2, queue_key: 'Outreach Team' }]);
+    expect(t.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });
 

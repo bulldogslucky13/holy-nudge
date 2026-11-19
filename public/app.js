@@ -227,15 +227,16 @@
   var hoursAgo = function (h) { return new Date(Date.now() - h * 3600000).toISOString(); };
   // All made up. A mix on purpose: staff and servant leaders, notifications on and off, one with no working link,
   // two added by name and not matched to Lead yet (17, 18), and the owner unmatched (15, which other staff can't change).
+  // Coordinators: one queue (11), two (14), one not matched to Lead yet (18), and staff who also coordinates (16).
   var mockLeaders = [
-    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true },
-    { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true },
-    { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: true },
-    { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: true },
-    { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, isStaff: true, canManage: false, isYou: false, matched: false },
-    { id: 16, name: 'Avery Placeholder', hasLink: true, lastSeenAt: hoursAgo(50), notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: true },
-    { id: 17, name: 'Jordan Notreal', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false },
-    { id: 18, name: 'Taylor Testwell', hasLink: true, lastSeenAt: hoursAgo(5), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: false },
+    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: ['Service Team'] },
+    { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: [] },
+    { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: true, coordinates: [] },
+    { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: ['Connect Card Coordinators', 'Outreach Team'] },
+    { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, isStaff: true, canManage: false, isYou: false, matched: false, coordinates: [] },
+    { id: 16, name: 'Avery Placeholder', hasLink: true, lastSeenAt: hoursAgo(50), notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: true, coordinates: ['Staff'] },
+    { id: 17, name: 'Jordan Notreal', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false, coordinates: [] },
+    { id: 18, name: 'Taylor Testwell', hasLink: true, lastSeenAt: hoursAgo(5), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: false, coordinates: ['Bible Study Hosts & Events Team'] },
   ];
 
   // Lead people nobody with a link is matched to yet (made up). Near-misses on purpose: an exact name would
@@ -274,7 +275,7 @@
   var mockAdded = []; // people "added" in a mock session (so a repeat name answers name_taken)
 
   function mockMe() {
-    var manager = mock === 'manager'; // a queue-manager admin who is not staff: summary only, no link controls
+    var manager = mock === 'manager'; // a queue coordinator who is not staff: their queues only, no link controls
     var admin = mock === 'admin' || mock === 'admin-sample' || manager;
     var items = [
       mockItem('e1', 'q3', 'Outreach Team', 'NOT_STARTED', '2026-11-10', 7, 'Pat Example', '405-555-0101'),
@@ -601,6 +602,7 @@
   }
 
   function render() {
+    if (closeOpenMenu) closeOpenMenu(false); // its node is about to be replaced
     switch (S.view) {
       case 'notoken':
         return show(noTokenScreen());
@@ -1210,7 +1212,7 @@
     return leaders.filter(function (l) { return l.hasLink && !l.notificationsOn; });
   }
 
-  /* The Team tab's count: staff count people with a link and no notifications; queue-manager admins (no
+  /* The Team tab's count: staff count people with a link and no notifications; coordinators (no
      leader list) keep the server's list of leaders in their queues without notifications. */
   function teamBadge() {
     var a = S.me.admin;
@@ -1238,7 +1240,7 @@
     var a = S.me.admin;
     if (Array.isArray(a.leaders)) return leadersSection(a.leaders); // link management is for staff only
 
-    // Queue-manager admins (not staff): a simple list, no link controls.
+    // Coordinators (not staff): a simple list, no link controls.
     var off = a.leadersWithoutNotifications;
     return h(
       'section',
@@ -1336,7 +1338,7 @@
       statusEl.textContent = 'Adding ' + name + '…';
       api('/api/leader-add', { method: 'POST', body: { name: name, role: role } })
         .then(function (res) {
-          var row = { id: res.leader.id, name: res.leader.name, hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: res.leader.role === 'staff', canManage: true, isYou: false };
+          var row = { id: res.leader.id, name: res.leader.name, hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: res.leader.role === 'staff', canManage: true, isYou: false, coordinates: [] };
           S.me.admin.leaders.push(row);
           S.me.admin.leaders.sort(function (a, b) { return a.name.localeCompare(b.name); });
           S.minted[row.id] = res.url;
@@ -1442,7 +1444,7 @@
     btn.disabled = true;
     statusEl.className = 'status-line small';
     statusEl.textContent = 'Making a new link…';
-    api('/api/leader-link', { method: 'POST', body: { leaderId: l.id } })
+    return api('/api/leader-link', { method: 'POST', body: { leaderId: l.id } })
       .then(function (res) {
         if (res.self) adoptOwnNewLink(res.url);
         S.minted[l.id] = res.url;
@@ -1465,7 +1467,7 @@
     btn.disabled = true;
     statusEl.className = 'status-line small';
     statusEl.textContent = 'Turning it off…';
-    api('/api/leader-revoke', { method: 'POST', body: { leaderId: l.id } })
+    return api('/api/leader-revoke', { method: 'POST', body: { leaderId: l.id } })
       .then(function () {
         delete S.minted[l.id];
         l.hasLink = false;
@@ -1761,30 +1763,27 @@
       statusEl.textContent = S.matchNote[l.id];
     }
     var minted = l.id === S.justAdded ? null : S.minted[l.id]; // the just-added person's link shows under the add form
-    var unmatched = l.hasLink && l.matched === false;
     var choosing = S.matchOpen === l.id && l.canManage && l.hasLink;
-    var btns = [];
+    // Link actions live in a small menu by the bell; the match icon after the name opens the Lead chooser.
+    var actions = [];
     if (l.canManage) {
-      if (unmatched && !choosing) {
-        btns.push(h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'Match ' + l.name + ' to a person in Lead', onclick: function () { openMatch(l); } }, 'Match'));
-      }
-      var mintBtn = h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'New link for ' + l.name }, 'New link');
-      mintBtn.addEventListener('click', function () { mintLink(l, mintBtn, statusEl); });
-      btns.push(mintBtn);
-      if (l.hasLink && !l.isYou) {
-        var offBtn = h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'Turn off the link for ' + l.name }, 'Turn off link');
-        offBtn.addEventListener('click', function () { revokeLink(l, offBtn, statusEl); });
-        btns.push(offBtn);
-      }
+      actions.push({ label: l.hasLink ? 'New link' : 'Make a link', run: function (trigger) { return mintLink(l, trigger, statusEl); } });
+      if (l.hasLink && !l.isYou) actions.push({ label: 'Turn off link', run: function (trigger) { return revokeLink(l, trigger, statusEl); } });
     }
+    var seen = lastSeenWords(l.lastSeenAt) + (l.canManage ? '' : ' · Only the owner can change this link.');
     return h(
       'li',
-      { class: 'card' },
+      { class: 'card leader-card' },
       h(
         'div',
         { class: 'row person' },
         h('span', { class: 'name' }, l.name, l.isYou ? h('span', { class: 'you' }, ' (you)') : null, matchIcon(l)),
-        h('span', { class: 'bell' + (l.notificationsOn ? '' : ' off'), role: 'img', 'aria-label': l.notificationsOn ? 'Notifications on' : 'Notifications off', title: l.notificationsOn ? 'Notifications on' : 'Notifications off' })
+        h(
+          'span',
+          { class: 'person-end' },
+          h('span', { class: 'bell' + (l.notificationsOn ? '' : ' off'), role: 'img', 'aria-label': l.notificationsOn ? 'Notifications on' : 'Notifications off', title: l.notificationsOn ? 'Notifications on' : 'Notifications off' }),
+          actions.length ? moreMenu(l, actions) : null
+        )
       ),
       l.isStaff || !l.hasLink
         ? h(
@@ -1794,12 +1793,107 @@
             l.hasLink ? null : h('span', { class: 'chip' }, 'no working link')
           )
         : null,
-      h('p', { class: 'muted small' }, lastSeenWords(l.lastSeenAt)),
+      coordinatesLine(l),
+      h('p', { class: 'muted small' }, seen),
       minted ? mintedPanel(l, minted) : null,
       choosing ? matchPanel(l) : null,
-      btns.length ? h('div', { class: 'btns' }, btns) : h('p', { class: 'muted small' }, 'Only the owner can change this link.'),
       statusEl
     );
+  }
+
+  /* ---- the per-row link menu (staff): one open at a time; closes on outside tap, Escape, Tab and after a choice ---- */
+
+  var closeOpenMenu = null;
+
+  function moreMenu(l, actions) {
+    var menuId = 'link-menu-' + l.id;
+    var trigger = h(
+      'button',
+      { class: 'more-btn', type: 'button', 'aria-label': 'Link options for ' + l.name, 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-controls': menuId, 'data-leader': String(l.id) },
+      h('span', { class: 'more-glyph', 'aria-hidden': 'true' })
+    );
+    var items = actions.map(function (a) {
+      return h('button', { class: 'menu-item', type: 'button', role: 'menuitem', tabindex: '-1', onclick: function () { choose(a); } }, a.label);
+    });
+    var menu = h('div', { class: 'menu', id: menuId, role: 'menu', 'aria-label': 'Link options for ' + l.name, hidden: true }, items);
+    var wrap = h('span', { class: 'more' }, trigger, menu);
+
+    function onDocPointer(ev) {
+      if (!wrap.contains(ev.target)) close(false);
+    }
+    function onKey(ev) {
+      var i = items.indexOf(document.activeElement);
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        close(true);
+      } else if (ev.key === 'Tab') {
+        close(false);
+      } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        var n = items.length;
+        items[((i < 0 ? (ev.key === 'ArrowDown' ? -1 : 0) : i) + (ev.key === 'ArrowDown' ? 1 : -1) + n) % n].focus();
+      } else if (ev.key === 'Home' || ev.key === 'End') {
+        ev.preventDefault();
+        items[ev.key === 'Home' ? 0 : items.length - 1].focus();
+      }
+    }
+    function open() {
+      if (closeOpenMenu) closeOpenMenu(false);
+      menu.hidden = false;
+      menu.classList.remove('up');
+      trigger.setAttribute('aria-expanded', 'true');
+      // Open upwards when there is no room below in the window but there is above; otherwise scroll it into view.
+      var r = menu.getBoundingClientRect();
+      var t = trigger.getBoundingClientRect();
+      if (r.bottom > window.innerHeight - 8 && t.top - r.height - 12 > 0) menu.classList.add('up');
+      else if (r.bottom > window.innerHeight - 8 && menu.scrollIntoView) menu.scrollIntoView({ block: 'nearest' });
+      document.addEventListener('pointerdown', onDocPointer, true);
+      wrap.addEventListener('keydown', onKey);
+      closeOpenMenu = close;
+      items[0].focus();
+    }
+    function close(refocus) {
+      menu.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', onDocPointer, true);
+      wrap.removeEventListener('keydown', onKey);
+      if (closeOpenMenu === close) closeOpenMenu = null;
+      if (refocus) trigger.focus();
+    }
+    function choose(a) {
+      close(true);
+      Promise.resolve(a.run(trigger)).then(function () { refocusMenuTrigger(l.id); });
+    }
+    trigger.addEventListener('click', function () {
+      if (menu.hidden) open();
+      else close(true);
+    });
+    trigger.addEventListener('keydown', function (ev) {
+      if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && menu.hidden) {
+        ev.preventDefault();
+        open();
+        if (ev.key === 'ArrowUp') items[items.length - 1].focus();
+      }
+    });
+    return wrap;
+  }
+
+  /* After an action re-renders the list, put focus back on that row's menu button (if the row is still there). */
+  function refocusMenuTrigger(id) {
+    var t = document.querySelector('.more-btn[data-leader="' + id + '"]');
+    if (t && document.activeElement !== t && (!document.activeElement || document.activeElement === document.body)) t.focus();
+  }
+
+  // Staff only (the leader list is): the queues this person coordinates, i.e. sees whole. Read-only, quiet text.
+  function coordinatesLine(l) {
+    var qs = Array.isArray(l.coordinates) ? l.coordinates : [];
+    if (!qs.length) return null;
+    return h('p', { class: 'muted small coordinates' }, 'Coordinates ' + listWords(qs));
+  }
+
+  function listWords(xs) {
+    if (xs.length <= 2) return xs.join(' and ');
+    return xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
   }
 
   // A small status icon after the name: matched (check in a circle) or not (dashed circle, question mark).
@@ -1810,7 +1904,7 @@
     var glyph = h('span', { class: 'match-glyph' });
     var joiner = document.createTextNode('\u2060'); // keeps the icon on the same line as the last word
     if (l.canManage) {
-      var label = ok ? 'Matched to Lead. Change' : 'Not matched to Lead. Match';
+      var label = ok ? 'Matched to Lead. Change' : 'Not matched to Lead. Choose a person';
       return [joiner, h('button', { class: 'match-icon' + (ok ? '' : ' none'), type: 'button', 'aria-label': label, title: label, onclick: function () { openMatch(l); } }, glyph)];
     }
     var plain = ok ? 'Matched to Lead' : 'Not matched to Lead';

@@ -26,7 +26,7 @@ export class FakeStore implements Store {
   addLeader(over: Partial<Omit<FakeLeader, 'id'>> & { name: string }, devices = 0): number {
     const id = this.nextId++;
     this.leaders.push({
-      id, chmsIndividualId: null, linkToken: `tok-${id}`, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, matchByHand: false, ...over,
+      id, chmsIndividualId: null, linkToken: `tok-${id}`, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, matchByHand: false, coordinatorOf: [], ...over,
     });
     for (let i = 0; i < devices; i++) this.subs.push({ id: this.nextId++, leaderId: id, endpoint: `https://push.example/${id}/${i}`, p256dh: 'k', auth: 'a' });
     return id;
@@ -34,7 +34,17 @@ export class FakeStore implements Store {
 
   private row(l: FakeLeader): LeaderRow {
     const { linkToken, ...rest } = l;
-    return { ...rest, hasLink: linkToken !== null && l.revokedAt === null, subscriptionCount: this.subs.filter((s) => s.leaderId === l.id).length };
+    return {
+      ...rest,
+      coordinatorOf: [...l.coordinatorOf].sort(),
+      hasLink: linkToken !== null && l.revokedAt === null,
+      subscriptionCount: this.subs.filter((s) => s.leaderId === l.id).length,
+    };
+  }
+  /** Delete the spare row `d`, moving its coordinator keys to `keep` (as the D1 store does in one batch). */
+  private dropInto(d: FakeLeader, keep: FakeLeader) {
+    keep.coordinatorOf = [...new Set([...keep.coordinatorOf, ...d.coordinatorOf])];
+    this.leaders = this.leaders.filter((l) => l !== d);
   }
 
   async upsertLeaders(people: { id: string; name: string }[]) {
@@ -58,7 +68,7 @@ export class FakeStore implements Store {
       if (!keep) continue;
       if (m.dropId !== null) {
         const d = this.spare(m.dropId, m.chmsId, m.keepId);
-        if (d) this.leaders = this.leaders.filter((l) => l !== d);
+        if (d) this.dropInto(d, keep);
       }
       if (this.leaders.some((l) => l.chmsIndividualId === m.chmsId)) continue;
       keep.chmsIndividualId = m.chmsId;
@@ -72,7 +82,7 @@ export class FakeStore implements Store {
     if (chmsId !== null) {
       if (dropId !== null) {
         const d = this.spare(dropId, chmsId, leaderId);
-        if (d) this.leaders = this.leaders.filter((l) => l !== d);
+        if (d) this.dropInto(d, keep);
       }
       if (this.leaders.some((l) => l.chmsIndividualId === chmsId && l.id !== leaderId)) return false;
     }

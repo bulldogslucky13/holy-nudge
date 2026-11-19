@@ -1,13 +1,18 @@
 // Read everything the job and views need from the data source, skipping excluded queues.
-import { filterExcludedQueues, computeNudges, type AdminResult, type BehindGroup } from '../core/behind';
+import { allQueuesView, filterExcludedQueues, type AdminResult, type BehindGroup, type CoordinatorScope } from '../core/behind';
 import { planMatches } from '../core/match';
 import type { DataSource, HolyNudgeConfig, Queue, QueueEntry } from '../core/types';
-import type { Store } from '../db';
+import type { LeaderRow, Store } from '../db';
 
 export interface Snapshot {
   /** Non-excluded queues of the configured process. */
   queues: Queue[];
   entries: QueueEntry[];
+  /**
+   * Ids of the process's excluded queues (dropped from `queues`). Coordinator keys are resolved with these
+   * reserved, so a key naming an excluded queue by id can never match another queue by name.
+   */
+  excludedQueueIds?: string[];
 }
 
 export class EmptyProcessError extends Error {
@@ -25,10 +30,14 @@ export async function loadSnapshot(ds: DataSource, config: HolyNudgeConfig): Pro
   const entries: QueueEntry[] = [];
   // Sequential on purpose: gentle on API rate limits.
   for (const q of queues) entries.push(...(await ds.listEntries(q.id)));
-  return { queues, entries };
+  const kept = new Set(queues.map((q) => q.id));
+  return { queues, entries, excludedQueueIds: all.filter((q) => !kept.has(q.id)).map((q) => q.id) };
 }
 
-/** Every assignee and queue manager in the snapshot, de-duplicated by ChMS id. */
+/**
+ * Every assignee and queue manager in the snapshot, de-duplicated by ChMS id: the Lead people who get a leader
+ * row and can be matched. Being a queue manager grants no access (see src/core/behind.ts, whole-queue scope).
+ */
 export function peopleSeen(s: Snapshot): { id: string; name: string }[] {
   const m = new Map<string, string>();
   for (const q of s.queues) for (const p of q.managers) m.set(p.id, p.name);
@@ -50,13 +59,14 @@ export async function syncLeaders(
   return merges.length ? store.applyMatches(merges) : 0;
 }
 
-const GLOBAL_ADMIN = '\u0000all';
-
-/** The admin view across every non-excluded queue (for leaders flagged is_admin). */
+/** The admin view across every non-excluded queue (for leaders flagged is_admin, "staff"). */
 export function globalAdminView(s: Snapshot, config: HolyNudgeConfig, now: Date): AdminResult {
-  const adminsByQueue = Object.fromEntries(s.queues.map((q) => [q.id, [GLOBAL_ADMIN]]));
-  const r = computeNudges(s.queues, s.entries, { ...config, adminsByQueue }, now).admins.find((a) => a.adminId === GLOBAL_ADMIN);
-  return r ?? { adminId: GLOBAL_ADMIN, name: null, queueIds: [], unassigned: [], behindByLeader: [] };
+  return allQueuesView(s.queues, s.entries, config, now);
+}
+
+/** Each leader row's coordinator keys, as computeNudges takes them (rows with none are left out). */
+export function coordinatorScopes(rows: readonly Pick<LeaderRow, 'id' | 'coordinatorOf'>[]): CoordinatorScope[] {
+  return rows.filter((r) => r.coordinatorOf.length > 0).map((r) => ({ leaderId: r.id, queueKeys: r.coordinatorOf }));
 }
 
 export interface AdminCounts {

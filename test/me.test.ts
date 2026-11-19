@@ -12,7 +12,7 @@ const config = (over: Parameters<typeof baseConfig>[0] = {}) => baseConfig({ dat
 
 const NOW = new Date('2026-01-15T14:00:00Z');
 const row = (over: Partial<LeaderRow>): LeaderRow => ({
-  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, ...over,
+  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, coordinatorOf: [], ...over,
 });
 
 const lee = person('L1', 'Lee');
@@ -56,11 +56,42 @@ describe('GET /api/me response', () => {
     expect(JSON.stringify(me)).not.toMatch(/email|@example\.com/);
   });
 
-  it('queue-manager admin view: unassigned, by leader (unassigned last), missing notifications, NO leader list', () => {
+  it('a Lead queue manager who is not marked as coordinator sees only their own students: no admin view', () => {
+    const mara = row({ id: 3, chmsIndividualId: 'M1', name: 'Mara' });
+    const me = buildMe({ config: config(), snapshot, leader: mara, leaders: [mara], now: NOW });
+    expect(me.leader.isAdmin).toBe(false);
+    expect('admin' in me).toBe(false);
+    // Her own students still show (here she has none in the queue she manages).
+    const lee = row({ id: 1, chmsIndividualId: 'L1', name: 'Lee' });
+    expect(buildMe({ config: config(), snapshot, leader: lee, leaders: [lee], now: NOW }).behind.map((i) => i.entryId)).toEqual(['e1', 'e2']);
+  });
+
+  it('a coordinator sees exactly their queues (by id or exact name), never sibling queues; works before matching', () => {
+    const two = {
+      queues: [...snapshot.queues, queue({ id: 'q2', name: 'Service', managers: [] })],
+      entries: [...snapshot.entries, entry({ id: 's1', queueId: 'q2', status: 'NOT_STARTED', assignee: null, created: '2026-01-14T14:00:00Z' })],
+    };
+    const view = (coordinatorOf: string[], chmsIndividualId: string | null = null) => {
+      const leader = row({ id: 7, chmsIndividualId, name: 'Cleo', coordinatorOf });
+      return buildMe({ config: config(), snapshot: two, leader, leaders: [leader], now: NOW });
+    };
+    const ids = (me: ReturnType<typeof view>) => me.admin?.unassigned.map((i) => i.entryId).sort() ?? null;
+    expect(ids(view(['q1']))).toEqual(['e3', 'e5', 'e6']);
+    expect(ids(view(['Outreach']))).toEqual(['e3', 'e5', 'e6']);
+    expect(ids(view(['Service']))).toEqual(['s1']);
+    expect(ids(view(['Outreach', 'q2']))).toEqual(['e3', 'e5', 'e6', 's1']);
+    expect(view(['q2'], 'L1').behind.map((i) => i.entryId)).toEqual(['e1', 'e2']); // own list from the Lead id, scope from the row
+    for (const keys of [[], ['outreach'], ['Outreach '], ['q3'], ['M1']]) {
+      const me = view(keys);
+      expect([keys, me.leader.isAdmin, 'admin' in me]).toEqual([keys, false, false]);
+    }
+  });
+
+  it('coordinator view: unassigned, by leader (unassigned last), missing notifications, NO leader list', () => {
     const leaders = [
       row({ id: 1, chmsIndividualId: 'L1', name: 'Lee', subscriptionCount: 1 }),
       row({ id: 2, chmsIndividualId: 'L2', name: 'Liv' }),
-      row({ id: 3, chmsIndividualId: 'M1', name: 'Mara' }),
+      row({ id: 3, chmsIndividualId: 'M1', name: 'Mara', coordinatorOf: ['Outreach'] }),
     ];
     const me = buildMe({ config: config(), snapshot, leader: leaders[2]!, leaders, now: NOW });
     expect(me.leader.isAdmin).toBe(true);
@@ -77,7 +108,7 @@ describe('GET /api/me response', () => {
     expect(a.byLeader[1]!.items[0]!.due).toBe('2026-01-14');
     expect(a.byLeader[1]!.items[0]!.daysOverdue).toBe(1);
     expect(a.leadersWithoutNotifications).toEqual([{ name: 'Liv' }]);
-    // Implicit (queue-manager) admins get no link or match features at all.
+    // Coordinators get no link or match features at all.
     expect('leaders' in a).toBe(false);
     expect('leadPeople' in a).toBe(false);
     expect(JSON.stringify(me)).not.toMatch(/\/l\/|"url"|token/i);
@@ -89,18 +120,26 @@ describe('GET /api/me response', () => {
     const snap = await loadSnapshot(createFixtureSource(NOW, cfg.timeZone), cfg);
     const owner = row({ id: 9, name: 'Owner', isAdmin: true, isOwner: true, lastSeenAt: '2026-01-15T13:00:00.000Z', subscriptionCount: 1 });
     const staff = row({ id: 4, name: 'Staffer', isAdmin: true });
-    const plainLeader = row({ id: 5, name: 'Ava', hasLink: false });
+    const plainLeader = row({ id: 5, name: 'Ava', hasLink: false, coordinatorOf: ['Service Team', '4', 'No Such Queue', 'Not Interested'] });
     const leaders = [owner, staff, plainLeader];
     const me = buildMe({ config: cfg, snapshot: snap, leader: owner, leaders, now: NOW });
     expect(me.admin!.byLeader.length).toBeGreaterThan(1);
     expect(me.admin!.leaders).toEqual([
-      { id: 5, name: 'Ava', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false },
-      { id: 9, name: 'Owner', hasLink: true, lastSeenAt: '2026-01-15T13:00:00.000Z', notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: false },
-      { id: 4, name: 'Staffer', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: false },
+      // Coordinated queues by name, in queue order; unknown and excluded keys grant nothing and are not shown.
+      { id: 5, name: 'Ava', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false, coordinates: ['Outreach Team', 'Service Team'] },
+      { id: 9, name: 'Owner', hasLink: true, lastSeenAt: '2026-01-15T13:00:00.000Z', notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: false, coordinates: [] },
+      { id: 4, name: 'Staffer', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: false, coordinates: [] },
     ]);
     // Every Lead person seen is free to match here (no row holds any of them).
     expect(me.admin!.leadPeople!.length).toBeGreaterThan(5);
     for (const p of me.admin!.leadPeople!) expect(Object.keys(p)).toEqual(['id', 'name']);
+    // Staff who are also marked coordinators: the mark is shown, the view stays the whole process.
+    const staffCoord = row({ id: 4, name: 'Staffer', isAdmin: true, coordinatorOf: ['Service Team'] });
+    const both = buildMe({ config: cfg, snapshot: snap, leader: staffCoord, leaders: [owner, staffCoord, plainLeader], now: NOW });
+    expect(both.admin!.unassigned).toEqual(me.admin!.unassigned);
+    expect(both.admin!.byLeader).toEqual(me.admin!.byLeader);
+    expect(both.admin!.leaders!.find((l) => l.id === 4)).toMatchObject({ isStaff: true, coordinates: ['Service Team'] });
+    expect(both.admin!.leadPeople).toBeDefined();
     // A non-owner staff member cannot manage the owner's row.
     const asStaff = buildMe({ config: cfg, snapshot: snap, leader: staff, leaders, now: NOW });
     expect(asStaff.admin!.leaders!.find((l) => l.id === 9)!.canManage).toBe(false);

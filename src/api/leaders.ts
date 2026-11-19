@@ -1,5 +1,5 @@
 // Staff link management: mint a fresh personal link, or turn one off.
-// Only leaders flagged is_admin ("staff") may do this; implicit queue-manager admins may not.
+// Only leaders flagged is_admin ("staff") may do this; queue coordinators may not.
 // An owner's link can be rotated or turned off only by an owner. Nobody can turn off their own link
 // from the app (that would lock them out); they can rotate it instead.
 import { holdsLeadPerson } from '../core/match';

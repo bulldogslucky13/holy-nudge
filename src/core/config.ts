@@ -60,12 +60,10 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
   if (typeof o.processId !== 'string' || o.processId === '') fail('processId must be a non-empty string');
   if (!isStringArray(o.excludedQueues)) fail('excludedQueues must be an array of strings');
 
-  const abq = o.adminsByQueue;
-  if (typeof abq !== 'object' || abq === null || Array.isArray(abq)) fail('adminsByQueue must be an object');
-  const adminsByQueue: Record<string, string[]> = {};
-  for (const [k, v] of Object.entries(abq)) {
-    if (!isStringArray(v)) fail(`adminsByQueue["${k}"] must be an array of strings`);
-    adminsByQueue[k] = v;
+  // Removed on purpose, not ignored: whole-queue access now comes only from the queue_coordinators table
+  // (migration 0005). A leftover key must not look as if it still grants anything.
+  if ('adminsByQueue' in o) {
+    fail('adminsByQueue is no longer supported: queue coordinators live in the database now (npm run add-leader -- --coordinator-of "<queue id or exact name>"). Remove the key.');
   }
 
   if (typeof o.timeZone !== 'string') fail('timeZone must be a string');
@@ -116,7 +114,6 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
   return {
     processId: o.processId,
     excludedQueues: o.excludedQueues,
-    adminsByQueue,
     timeZone: o.timeZone,
     morningHour: hour,
     followUpDays,

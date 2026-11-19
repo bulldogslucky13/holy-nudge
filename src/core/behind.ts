@@ -105,11 +105,41 @@ export function filterExcludedQueues(queues: Queue[], config: Pick<HolyNudgeConf
   return queues.filter((q) => !excluded.has(q.id) && !excluded.has(q.name));
 }
 
-/** Admin ids for a queue: config mapping (by id, then by name) if non-empty, else the queue's managers. */
-export function adminIdsForQueue(queue: Queue, config: Pick<HolyNudgeConfig, 'adminsByQueue'>): string[] {
-  const mapped = config.adminsByQueue[queue.id] ?? config.adminsByQueue[queue.name];
-  if (mapped && mapped.length > 0) return mapped;
-  return queue.managers.map((m) => m.id);
+/* ---------------------------------------------------------------- whole-queue scope
+ *
+ * Seeing a WHOLE queue (everyone unassigned or behind in it, and its morning summary) is granted only by:
+ *  - staff (leaders.is_admin): every non-excluded queue (allQueuesView), or
+ *  - a coordinator row (table queue_coordinators): the queues named by that leader row's keys.
+ * Lead's queue managers grant nothing: in the real data every team member manages their own queue. Scope
+ * attaches to the app's leader row (the person holding the personal link), never to a Lead id, so it works
+ * before the row is matched to Lead. With no coordinator rows, nobody but staff has a whole-queue view.
+ */
+
+/** One leader row's coordinator keys (queue_coordinators.queue_key: queue ids or exact queue names). */
+export interface CoordinatorScope {
+  leaderId: number;
+  queueKeys: readonly string[];
+}
+
+/**
+ * Ids (in `queues` order) of the queues that `keys` name. A key equal to some queue's id matches that queue
+ * only; any other key matches every queue with exactly that name (case and spacing count). A key that matches
+ * nothing grants nothing.
+ *
+ * `reservedIds` are ids of queues that exist but are not in `queues` (the excluded ones, which the snapshot
+ * drops before anything is computed). A key equal to one of them names that excluded queue and nothing else:
+ * it must never fall through to another queue that happens to have that text as its name.
+ */
+export function queueIdsForKeys(queues: readonly Queue[], keys: readonly string[], reservedIds: readonly string[] = []): string[] {
+  const ids = new Set(queues.map((q) => q.id));
+  const reserved = new Set(reservedIds);
+  const hit = new Set<string>();
+  for (const k of keys) {
+    if (ids.has(k)) hit.add(k);
+    else if (reserved.has(k)) continue;
+    else for (const q of queues) if (q.name === k) hit.add(q.id);
+  }
+  return queues.filter((q) => hit.has(q.id)).map((q) => q.id);
 }
 
 export interface LeaderResult {
@@ -123,89 +153,107 @@ export interface BehindGroup {
   entries: QueueEntry[];
 }
 
+/** A whole-queue view: what a coordinator (their queues) or staff (every queue) sees and is summarised. */
 export interface AdminResult {
-  adminId: string;
-  /** Known from queue managers or assignees; null if the id appears only in config. */
-  name: string | null;
+  /** Non-excluded queues in scope, in queue order. */
   queueIds: string[];
-  /** Every unassigned, not-DONE entry in the admin's queues. */
+  /** Every unassigned, not-DONE entry in those queues. */
   unassigned: QueueEntry[];
   behindByLeader: BehindGroup[];
+}
+
+export interface CoordinatorResult extends AdminResult {
+  /** The app leader row (leaders.id) holding the coordinator rows. */
+  leaderId: number;
 }
 
 export interface NudgeResults {
   /** One item per assignee with at least one behind entry, sorted by name. */
   leaders: LeaderResult[];
-  /** One item per admin of any non-excluded queue (lists may be empty), sorted by adminId. */
-  admins: AdminResult[];
+  /**
+   * One item per coordinator whose keys match at least one non-excluded queue (lists may be empty), sorted
+   * by leaderId. Coordinators whose keys match nothing are left out: they have no whole-queue view.
+   */
+  coordinators: CoordinatorResult[];
+}
+
+interface Active {
+  queues: Queue[];
+  entries: QueueEntry[];
+  behind: QueueEntry[];
+}
+
+function activeData(queues: Queue[], entries: QueueEntry[], config: HolyNudgeConfig, now: Date): Active {
+  const activeQueues = filterExcludedQueues(queues, config);
+  const ids = new Set(activeQueues.map((q) => q.id));
+  const active = entries.filter((e) => ids.has(e.queueId));
+  return { queues: activeQueues, entries: active, behind: active.filter((e) => isBehind(e, now, config.timeZone)) };
+}
+
+function scopeView(a: Active, queueIds: string[]): AdminResult {
+  const scope = new Set(queueIds);
+  const inScope = (e: QueueEntry) => scope.has(e.queueId);
+  const groups = new Map<string, BehindGroup>();
+  for (const e of a.behind.filter(inScope)) {
+    const key = e.assignee?.id ?? '';
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { leader: e.assignee, entries: [] }));
+    g.entries.push(e);
+  }
+  const behindByLeader = [...groups.values()].sort((x, y) => {
+    if (x.leader === null) return 1; // unassigned last
+    if (y.leader === null) return -1;
+    return x.leader.name.localeCompare(y.leader.name) || x.leader.id.localeCompare(y.leader.id);
+  });
+  return { queueIds, unassigned: a.entries.filter((e) => inScope(e) && isUnassigned(e)), behindByLeader };
+}
+
+/** The staff view: every non-excluded queue. */
+export function allQueuesView(queues: Queue[], entries: QueueEntry[], config: HolyNudgeConfig, now: Date): AdminResult {
+  const a = activeData(queues, entries, config, now);
+  return scopeView(a, a.queues.map((q) => q.id));
 }
 
 /**
- * Compute who gets nudged. Excluded queues are removed first; entries in queues not
- * listed in `queues` are ignored.
+ * Compute who gets nudged. Excluded queues are removed first; entries in queues not listed in `queues` are
+ * ignored. `coordinators` (from queue_coordinators) is the only source of whole-queue scope here; leave it
+ * out and nobody gets one. Staff use allQueuesView instead.
  */
 export function computeNudges(
   queues: Queue[],
   entries: QueueEntry[],
   config: HolyNudgeConfig,
   now: Date,
+  coordinators: readonly CoordinatorScope[] = [],
+  /** Ids of excluded queues already dropped from `queues` (Snapshot.excludedQueueIds). */
+  reservedIds: readonly string[] = [],
 ): NudgeResults {
-  const tz = config.timeZone;
-  const activeQueues = filterExcludedQueues(queues, config);
-  const queueById = new Map(activeQueues.map((q) => [q.id, q]));
-  const active = entries.filter((e) => queueById.has(e.queueId));
-
-  const behindEntries = active.filter((e) => isBehind(e, now, tz));
+  const a = activeData(queues, entries, config, now);
 
   // Leaders: group behind entries by assignee id.
   const byLeader = new Map<string, LeaderResult>();
-  for (const e of behindEntries) {
+  for (const e of a.behind) {
     if (!e.assignee) continue;
     let r = byLeader.get(e.assignee.id);
     if (!r) byLeader.set(e.assignee.id, (r = { leader: e.assignee, behind: [] }));
     r.behind.push(e);
   }
   const leaders = [...byLeader.values()].sort(
-    (a, b) => a.leader.name.localeCompare(b.leader.name) || a.leader.id.localeCompare(b.leader.id),
+    (x, y) => x.leader.name.localeCompare(y.leader.name) || x.leader.id.localeCompare(y.leader.id),
   );
 
-  // Admins: queues each administers, plus whatever name we can learn.
-  const adminQueues = new Map<string, Set<string>>();
-  const adminNames = new Map<string, string>();
-  for (const q of activeQueues) {
-    for (const id of adminIdsForQueue(q, config)) {
-      let s = adminQueues.get(id);
-      if (!s) adminQueues.set(id, (s = new Set()));
-      s.add(q.id);
-    }
-    for (const m of q.managers) adminNames.set(m.id, m.name);
+  // Coordinators: the same leader row listed twice gets the union of its keys.
+  const keysByLeader = new Map<number, string[]>();
+  for (const c of coordinators) keysByLeader.set(c.leaderId, [...(keysByLeader.get(c.leaderId) ?? []), ...c.queueKeys]);
+  const activeIds = new Set(a.queues.map((q) => q.id));
+  const out: CoordinatorResult[] = [];
+  for (const [leaderId, keys] of [...keysByLeader].sort(([x], [y]) => x - y)) {
+    // Resolve against every queue given (so an excluded queue's id cannot fall through to a name match), then
+    // keep only the non-excluded ones.
+    const queueIds = queueIdsForKeys(queues, keys, reservedIds).filter((id) => activeIds.has(id));
+    if (queueIds.length === 0) continue;
+    out.push({ leaderId, ...scopeView(a, queueIds) });
   }
-  for (const e of active) if (e.assignee && !adminNames.has(e.assignee.id)) adminNames.set(e.assignee.id, e.assignee.name);
 
-  const admins: AdminResult[] = [...adminQueues.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([adminId, qset]) => {
-      const inScope = (e: QueueEntry) => qset.has(e.queueId);
-      const groups = new Map<string, BehindGroup>();
-      for (const e of behindEntries.filter(inScope)) {
-        const key = e.assignee?.id ?? '';
-        let g = groups.get(key);
-        if (!g) groups.set(key, (g = { leader: e.assignee, entries: [] }));
-        g.entries.push(e);
-      }
-      const behindByLeader = [...groups.values()].sort((a, b) => {
-        if (a.leader === null) return 1; // unassigned last
-        if (b.leader === null) return -1;
-        return a.leader.name.localeCompare(b.leader.name) || a.leader.id.localeCompare(b.leader.id);
-      });
-      return {
-        adminId,
-        name: adminNames.get(adminId) ?? null,
-        queueIds: [...qset],
-        unassigned: active.filter((e) => inScope(e) && isUnassigned(e)),
-        behindByLeader,
-      };
-    });
-
-  return { leaders, admins };
+  return { leaders, coordinators: out };
 }

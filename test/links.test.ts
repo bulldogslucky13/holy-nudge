@@ -15,7 +15,7 @@ import { hashToken } from '../src/db';
 import { createTestD1, type TestD1 } from './sqlite-d1';
 
 const HOST = 'https://holynudge.cameronbristol.xyz';
-const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql'];
+const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql', 'migrations/0005_queue_coordinators.sql'];
 const KEYS = { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' };
 
 let t: TestD1;
@@ -46,6 +46,8 @@ beforeEach(async () => {
   ins.run(id.staff, null, 'Staff Person', await hashToken(tok.staff), null, 1, 0);
   ins.run(id.leader, 'L101', 'Plain Leader', await hashToken(tok.leader), null, 0, 0);
   ins.run(id.manager, 'M201', 'Queue Manager', await hashToken(tok.manager), null, 0, 0);
+  // The queue manager is also marked as a coordinator: that gives a whole-queue view, never link or staff powers.
+  t.sqlite.prepare("INSERT INTO queue_coordinators (leader_id, queue_key) VALUES (?, 'Connect Card Coordinators')").run(id.manager);
   // A link issued before migration 0003: plaintext only (what production's owner row looks like today).
   ins.run(id.legacy, 'L102', 'Legacy Leader', null, tok.legacy, 0, 0);
   t.sqlite.prepare("INSERT INTO push_subscriptions (leader_id, endpoint, p256dh, auth) VALUES (?, 'https://web.push.apple.com/leader', ?, ?)").run(id.leader, KEYS.p256dh, KEYS.auth);
@@ -138,9 +140,9 @@ describe('POST /api/leader-link and /api/leader-revoke', () => {
     expect((await call(me, '/api/me', url.split('/l/')[1]!)).status).toBe(200);
   });
 
-  it('is staff only: a plain leader and an implicit queue-manager admin get 403', async () => {
-    // (An implicit admin's own view is covered in me.test.ts with live data; on the fixture, pre-launch,
-    // a non-staff manager gets no admin view at all: see test/prelaunch.test.ts.)
+  it('is staff only: a plain leader and a coordinator get 403', async () => {
+    // (A coordinator's own view is covered in me.test.ts with live data; on the fixture, pre-launch,
+    // a non-staff coordinator gets no admin view at all: see test/prelaunch.test.ts.)
     for (const who of [tok.leader, tok.manager]) {
       for (const fn of [leaderLink, leaderRevoke]) {
         const res = await call(fn, '/api/x', who, { leaderId: id.legacy });
@@ -210,7 +212,7 @@ describe('POST /api/leader-add', () => {
     expect(view.admin.leaders.find((l) => l.id === leader.id)).toMatchObject({ name: 'Riley Newperson', hasLink: true, canManage: true, notificationsOn: false });
   });
 
-  it('is staff only: plain leaders and implicit queue-manager admins get 403, no token gets 401, and nothing is created', async () => {
+  it('is staff only: plain leaders and coordinators get 403, no token gets 401, and nothing is created', async () => {
     for (const who of [tok.leader, tok.manager]) {
       const res = await add(who, { name: 'Sneaky Person' });
       expect(res.status).toBe(403);
@@ -320,7 +322,7 @@ describe('POST /api/leader-add', () => {
     expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders WHERE is_owner = 1 AND id > 5').get()).toEqual({ n: 0 });
   });
 
-  it('non-staff and implicit queue admins still get 403, whatever role they ask for', async () => {
+  it('non-staff and coordinators still get 403, whatever role they ask for', async () => {
     for (const who of [tok.leader, tok.manager]) {
       for (const role of ['leader', 'staff', 'owner']) expect((await add(who, { name: 'Sneaky Person', role })).status).toBe(403);
     }
@@ -350,7 +352,7 @@ describe('GET /api/me before real data is connected (fixture)', () => {
   type MeBody = { leader: { name: string; isAdmin: boolean }; live: boolean; behind: unknown[]; admin?: unknown };
   const get = async (token: string) => (await (await call(me, '/api/me', token)).json()) as MeBody;
 
-  it('non-staff rows mapped to a sample leader or sample queue manager get nothing: live false, empty behind, no admin', async () => {
+  it('non-staff rows mapped to a sample leader or sample queue manager (marked coordinator) get nothing: live false, empty behind, no admin', async () => {
     for (const who of [tok.leader, tok.manager, tok.legacy]) {
       const body = await get(who);
       expect(body.live).toBe(false);
@@ -392,8 +394,11 @@ describe('GET /api/me privacy contract', () => {
     expect(items.length).toBeGreaterThan(0);
     for (const i of items) expect(Object.keys(i.individual).sort()).toEqual(['name', 'phone']);
     expect(owner.admin.leaders.map((l: any) => Object.keys(l).sort())[0]).toEqual(
-      ['canManage', 'hasLink', 'id', 'isStaff', 'isYou', 'lastSeenAt', 'matched', 'name', 'notificationsOn'],
+      ['canManage', 'coordinates', 'hasLink', 'id', 'isStaff', 'isYou', 'lastSeenAt', 'matched', 'name', 'notificationsOn'],
     );
+    // Staff see who coordinates what (queue names only, read from the coordinator rows).
+    expect(owner.admin.leaders.find((l: any) => l.id === id.manager).coordinates).toEqual(['Connect Card Coordinators']);
+    expect(owner.admin.leaders.find((l: any) => l.id === id.leader).coordinates).toEqual([]);
     // Staff page views create rows for every ChMS leader, with no link.
     expect(owner.admin.leaders.length).toBeGreaterThan(5);
     const noLink = t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders WHERE token_hash IS NULL AND token IS NULL').get() as { n: number };

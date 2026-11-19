@@ -18,6 +18,11 @@ export interface LeaderRow {
   subscriptionCount: number;
   /** Staff set or cleared this row's Lead match by hand (migration 0004): automatic matching leaves it alone. */
   matchByHand: boolean;
+  /**
+   * Queue keys (queue ids or exact names) this row coordinates (table queue_coordinators, migration 0005),
+   * sorted. The only source of whole-queue scope besides staff; empty for almost everyone.
+   */
+  coordinatorOf: string[];
 }
 
 export interface SubscriptionRow {
@@ -49,12 +54,14 @@ export interface Store {
    * Automatic Lead matches, in one atomic batch: each `keepId` (a row with no ChMS id, not decided by hand)
    * takes `chmsId`, and `dropId` (that person's spare row: no link, not staff or owner, no devices) is deleted.
    * Each merge re-checks those conditions in SQL and is skipped if anything changed. Returns how many applied.
+   * The deleted row's coordinator rows (queue_coordinators) move to `keepId` in the same batch.
    */
   applyMatches(merges: Merge[]): Promise<number>;
   /**
    * Staff decide a row's match by hand (sets match_by_hand). `chmsId` null clears it (the link stays).
    * Otherwise the row takes `chmsId`, and `dropId` (the person's spare row, same conditions as above) is
-   * deleted. False when another row still holds `chmsId` or the row is gone.
+   * deleted, its coordinator rows moving to `leaderId` in the same batch. False when another row still holds
+   * `chmsId` or the row is gone. Clearing or changing a match never touches the row's own coordinator rows.
    */
   setMatch(leaderId: number, chmsId: string | null, dropId: number | null): Promise<boolean>;
   leaderById(id: number): Promise<LeaderRow | null>;
@@ -139,13 +146,15 @@ interface LeaderDbRow {
   revoked_at: string | null;
   subscription_count: number;
   match_by_hand: number;
+  coordinator_of: string;
 }
 
 // Never selects token or token_hash: callers only learn whether a link exists.
 const LEADER_SELECT = `
   SELECT l.id, l.chms_individual_id, l.name, l.is_admin, l.is_owner, l.last_seen_at, l.revoked_at, l.match_by_hand,
          (l.revoked_at IS NULL AND (l.token_hash IS NOT NULL OR l.token IS NOT NULL)) AS has_link,
-         (SELECT COUNT(*) FROM push_subscriptions s WHERE s.leader_id = l.id) AS subscription_count
+         (SELECT COUNT(*) FROM push_subscriptions s WHERE s.leader_id = l.id) AS subscription_count,
+         (SELECT json_group_array(c.queue_key) FROM queue_coordinators c WHERE c.leader_id = l.id) AS coordinator_of
   FROM leaders l`;
 
 function toLeader(r: LeaderDbRow): LeaderRow {
@@ -160,8 +169,21 @@ function toLeader(r: LeaderDbRow): LeaderRow {
     revokedAt: r.revoked_at,
     subscriptionCount: r.subscription_count,
     matchByHand: r.match_by_hand === 1,
+    coordinatorOf: parseKeys(r.coordinator_of),
   };
 }
+
+function parseKeys(json: string | null): string[] {
+  const v: unknown = JSON.parse(json ?? '[]');
+  return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string').sort() : [];
+}
+
+// A merge deletes a spare leader row (?3) and hands its Lead person to the kept row (?1). Its coordinator rows
+// go with it, in the same batch: COPY_COORDINATORS runs (under the same conditions as the delete, which it
+// precedes) and DROP_ORPHAN_COORDINATORS then removes any left on a row that no longer exists. That second
+// step does not rely on ON DELETE CASCADE (D1 does enforce foreign keys; this holds either way). A merge that
+// is skipped copies nothing, so nothing ever lands on a row that is not the same person.
+const DROP_ORPHAN_COORDINATORS = `DELETE FROM queue_coordinators WHERE leader_id = ?1 AND NOT EXISTS (SELECT 1 FROM leaders WHERE id = ?1)`;
 
 // A row that may be deleted to hand its Lead person to another row: still holds ?chms, no working link,
 // not staff or owner, no devices (the same test as holdsLeadPerson in src/core/match.ts).
@@ -190,6 +212,12 @@ export function createD1Store(db: D1Database): Store {
       // the delete runs only if the update will (and the update only once nobody else holds the id).
       const keepOk = `EXISTS (SELECT 1 FROM leaders k WHERE k.id = ?1 AND k.chms_individual_id IS NULL AND k.match_by_hand = 0)`;
       const del = db.prepare(`DELETE FROM leaders AS d WHERE d.id = ?3 AND ${SPARE_ROW} AND ${keepOk}`);
+      const copy = db.prepare(
+        `INSERT OR IGNORE INTO queue_coordinators (leader_id, queue_key)
+         SELECT ?1, c.queue_key FROM queue_coordinators c JOIN leaders d ON d.id = c.leader_id
+         WHERE d.id = ?3 AND ${SPARE_ROW} AND ${keepOk}`,
+      );
+      const orphans = db.prepare(DROP_ORPHAN_COORDINATORS);
       const upd = db.prepare(
         `UPDATE leaders SET chms_individual_id = ?2
          WHERE id = ?1 AND chms_individual_id IS NULL AND match_by_hand = 0
@@ -198,7 +226,7 @@ export function createD1Store(db: D1Database): Store {
       const stmts: D1PreparedStatement[] = [];
       const updIndex: number[] = [];
       for (const m of merges) {
-        if (m.dropId !== null) stmts.push(del.bind(m.keepId, m.chmsId, m.dropId));
+        if (m.dropId !== null) stmts.push(copy.bind(m.keepId, m.chmsId, m.dropId), del.bind(m.keepId, m.chmsId, m.dropId), orphans.bind(m.dropId));
         updIndex.push(stmts.length);
         stmts.push(upd.bind(m.keepId, m.chmsId));
       }
@@ -216,10 +244,16 @@ export function createD1Store(db: D1Database): Store {
       }
       const stmts: D1PreparedStatement[] = [];
       if (dropId !== null) {
+        const dropOk = `d.id = ?3 AND d.id <> ?1 AND ${SPARE_ROW} AND EXISTS (SELECT 1 FROM leaders k WHERE k.id = ?1)`;
         stmts.push(
           db
-            .prepare(`DELETE FROM leaders AS d WHERE d.id = ?3 AND d.id <> ?1 AND ${SPARE_ROW} AND EXISTS (SELECT 1 FROM leaders k WHERE k.id = ?1)`)
+            .prepare(
+              `INSERT OR IGNORE INTO queue_coordinators (leader_id, queue_key)
+               SELECT ?1, c.queue_key FROM queue_coordinators c JOIN leaders d ON d.id = c.leader_id WHERE ${dropOk}`,
+            )
             .bind(leaderId, chmsId, dropId),
+          db.prepare(`DELETE FROM leaders AS d WHERE ${dropOk}`).bind(leaderId, chmsId, dropId),
+          db.prepare(DROP_ORPHAN_COORDINATORS).bind(dropId),
         );
       }
       stmts.push(
