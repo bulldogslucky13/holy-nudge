@@ -1604,12 +1604,17 @@
       );
     }
 
-    if (S.matchQuery === null) S.matchQuery = String(l.name || '').trim().split(/\s+/)[0] || '';
     if (!people.some(function (p) { return p.id === S.matchChoice; })) S.matchChoice = '';
 
     var ranked = NM.rankPeople(l.name, people); // best first, ties by name
     var suggested = ranked.filter(function (p) { return p.score >= NM.SUGGEST_MIN; }).slice(0, 3);
     var others = ranked.filter(function (p) { return suggested.indexOf(p) === -1; }); // each person shows once
+
+    if (S.matchQuery === null) {
+      // Start on the leader's first name, unless that would open on an empty list: then show everyone.
+      var first = String(l.name || '').trim().split(/\s+/)[0] || '';
+      S.matchQuery = others.some(function (p) { return NM.matchQuery(first, p.name) > 0; }) ? first : '';
+    }
     var radioName = 'lead-person-' + l.id;
     var saveBtn = h('button', { class: 'btn small-btn primary', type: 'submit' }, l.matched ? 'Change match' : 'Match');
     var chosenEl = h('p', { class: 'small chosen-line', 'aria-live': 'polite' });
