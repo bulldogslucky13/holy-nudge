@@ -1,4 +1,4 @@
-// The daily job: load -> compute behind -> push leaders and admins -> record the run.
+// The daily job: load -> sync and match leader rows -> compute behind -> push leaders and admins -> record the run.
 import { ChmsNotConfiguredError } from '../chms/oauth';
 import { IncompleteDataError } from '../chms/pushpay';
 import { ReauthorizationRequired, TokenPersistError } from '../chms/tokens';
@@ -10,7 +10,7 @@ import type { JobRunSummary, LeaderRow, Store } from '../db';
 import { addCounts, deliverToLeader, emptyCounts, type DeliveryCounts } from '../push/deliver';
 import { adminPayload, alertPayload, leaderPayload, type AlertReason } from '../push/payload';
 import type { PushSender } from '../push/sender';
-import { adminCounts, globalAdminView, loadSnapshot, peopleSeen, type Snapshot } from './load';
+import { adminCounts, globalAdminView, loadSnapshot, peopleSeen, syncLeaders, type Snapshot } from './load';
 
 /** Local wall-clock hour (0-23) of an instant in an IANA zone. */
 export function localHour(now: Date, timeZone: string): number {
@@ -77,7 +77,7 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     stage = 'job';
 
     const people = peopleSeen(snapshot);
-    await store.upsertLeaders(people);
+    const leadersMatched = await syncLeaders(store, people);
     const rows = await store.listLeaders();
     const byChms = new Map(rows.filter((r) => r.chmsIndividualId).map((r) => [r.chmsIndividualId!, r]));
 
@@ -122,6 +122,7 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
       queues: snapshot.queues.length,
       entries: snapshot.entries.length,
       leadersSeen: people.length,
+      leadersMatched,
       leadersBehind: nudges.leaders.length,
       behind: nudges.leaders.reduce((n, l) => n + l.behind.length, 0),
       unassignedWaiting: globalCounts.unassigned,

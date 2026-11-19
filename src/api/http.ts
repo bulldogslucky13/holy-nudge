@@ -61,7 +61,7 @@ export const RATE_LIMITS = {
   /** Every /api/me reads ChMS live; one leaked link must not drive unlimited reads. */
   me: { max: 30, windowMs: 5 * 60 * 1000 },
   'test-push': { max: 5, windowMs: 10 * 60 * 1000 },
-  /** Staff minting or turning off links. */
+  /** Staff minting or turning off links, adding leaders, and matching leaders to Lead people. */
   links: { max: 30, windowMs: 10 * 60 * 1000 },
 } as const;
 

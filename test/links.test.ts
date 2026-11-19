@@ -15,7 +15,7 @@ import { hashToken } from '../src/db';
 import { createTestD1, type TestD1 } from './sqlite-d1';
 
 const HOST = 'https://holynudge.cameronbristol.xyz';
-const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql'];
+const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql'];
 const KEYS = { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' };
 
 let t: TestD1;
@@ -383,7 +383,7 @@ describe('GET /api/me privacy contract', () => {
     expect(items.length).toBeGreaterThan(0);
     for (const i of items) expect(Object.keys(i.individual).sort()).toEqual(['name', 'phone']);
     expect(owner.admin.leaders.map((l: any) => Object.keys(l).sort())[0]).toEqual(
-      ['canManage', 'hasLink', 'id', 'isStaff', 'isYou', 'lastSeenAt', 'name', 'notificationsOn'],
+      ['canManage', 'hasLink', 'id', 'isStaff', 'isYou', 'lastSeenAt', 'matched', 'name', 'notificationsOn'],
     );
     // Staff page views create rows for every ChMS leader, with no link.
     expect(owner.admin.leaders.length).toBeGreaterThan(5);

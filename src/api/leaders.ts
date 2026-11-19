@@ -2,6 +2,7 @@
 // Only leaders flagged is_admin ("staff") may do this; implicit queue-manager admins may not.
 // An owner's link can be rotated or turned off only by an owner. Nobody can turn off their own link
 // from the app (that would lock them out); they can rotate it instead.
+import { holdsLeadPerson } from '../core/match';
 import type { LeaderRow, Store } from '../db';
 import { generateToken, hashToken } from '../db';
 import { canManageLink, personalLink } from './me';
@@ -10,7 +11,7 @@ export type LinkError = 'forbidden' | 'not_found' | 'owner_protected' | 'cannot_
 
 export type LinkStore = Pick<Store, 'leaderById' | 'setLinkTokenHash' | 'revokeLink'>;
 
-async function check(store: LinkStore, actor: LeaderRow, leaderId: unknown): Promise<{ target: LeaderRow } | { error: LinkError }> {
+async function check(store: Pick<Store, 'leaderById'>, actor: LeaderRow, leaderId: unknown): Promise<{ target: LeaderRow } | { error: LinkError }> {
   if (!actor.isAdmin) return { error: 'forbidden' };
   if (typeof leaderId !== 'number' || !Number.isSafeInteger(leaderId) || leaderId <= 0) return { error: 'not_found' };
   const target = await store.leaderById(leaderId);
@@ -120,4 +121,54 @@ export const LINK_ERROR_STATUS: Record<LinkError, number> = {
   owner_protected: 403,
   cannot_revoke_self: 400,
   not_found: 404,
+};
+
+export type MatchError = LinkError | 'no_link' | 'invalid_person' | 'unknown_person' | 'person_taken';
+
+const CHMS_ID_MAX = 64;
+
+/**
+ * Staff tie a leader to a Lead (ChMS) person by hand, or clear the tie (`chmsId` null). Either way the row is
+ * marked as decided by hand, so automatic name matching never changes it again; the link, devices, role and
+ * last-seen stay as they are. Same staff check and owner protection as the link routes. Only rows with a
+ * working link can be matched (rows without one are Lead people's own automatic rows).
+ *
+ * The Lead person must already have a leader row (staff page views and the daily job create one for every
+ * person seen), and that row must be a spare (no link, not staff or owner, no devices): it is deleted as the
+ * person moves to this row. A person held by another row in use is refused with `person_taken`.
+ */
+export async function matchLeader(
+  store: Pick<Store, 'leaderById' | 'listLeaders' | 'setMatch'>,
+  actor: LeaderRow,
+  leaderId: unknown,
+  rawChmsId: unknown,
+): Promise<{ ok: true; matched: boolean } | { error: MatchError }> {
+  const c = await check(store, actor, leaderId);
+  if ('error' in c) return c;
+  const target = c.target;
+  if (!target.hasLink) return { error: 'no_link' };
+
+  if (rawChmsId === null) {
+    if (!(await store.setMatch(target.id, null, null))) return { error: 'not_found' };
+    return { ok: true, matched: false };
+  }
+  if (typeof rawChmsId !== 'string' || rawChmsId === '' || rawChmsId.length > CHMS_ID_MAX || rawChmsId.trim() !== rawChmsId) {
+    return { error: 'invalid_person' };
+  }
+  const chmsId = rawChmsId;
+  if (target.chmsIndividualId === chmsId) return { ok: true, matched: true };
+
+  const holder = (await store.listLeaders()).find((l) => l.chmsIndividualId === chmsId);
+  if (!holder) return { error: 'unknown_person' };
+  if (holdsLeadPerson(holder)) return { error: 'person_taken' };
+  if (!(await store.setMatch(target.id, chmsId, holder.id))) return { error: 'person_taken' };
+  return { ok: true, matched: true };
+}
+
+export const MATCH_ERROR_STATUS: Record<MatchError, number> = {
+  ...LINK_ERROR_STATUS,
+  no_link: 400,
+  invalid_person: 400,
+  unknown_person: 404,
+  person_taken: 409,
 };

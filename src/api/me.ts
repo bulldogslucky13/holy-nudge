@@ -1,11 +1,12 @@
 // Builds the GET /api/me response (docs/ARCHITECTURE.md "JSON contract").
 import { computeNudges, type AdminResult } from '../core/behind';
+import { availableLeadPeople } from '../core/match';
 import { adminQueueUrl, isLive, queueUrl } from '../core/config';
 import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from '../core/time';
 import type { HolyNudgeConfig, Queue, QueueEntry, Status } from '../core/types';
 import { errorClassName } from '../core/errors';
 import type { LeaderRow, Store } from '../db';
-import { globalAdminView, peopleSeen, type Snapshot } from '../job/load';
+import { globalAdminView, peopleSeen, syncLeaders, type Snapshot } from '../job/load';
 
 export interface ItemJson {
   entryId: string;
@@ -35,6 +36,14 @@ export interface LeaderAdminJson {
   /** False for the owner's row unless the viewer is the owner (only the owner rotates or turns off an owner link). */
   canManage: boolean;
   isYou: boolean;
+  /** Tied to a Lead (ChMS) person, so once live they see that person's students. The id itself is not sent. */
+  matched: boolean;
+}
+
+/** A Lead person staff may match a leader to (seen in Lead data, not held by another row in use). */
+export interface LeadPersonJson {
+  id: string;
+  name: string;
 }
 
 export interface MeJson {
@@ -51,6 +60,8 @@ export interface MeJson {
     leadersWithoutNotifications: { name: string }[];
     /** Staff only (leaders flagged is_admin). Implicit queue admins never get this key. */
     leaders?: LeaderAdminJson[];
+    /** Staff only, with `leaders`: who a leader can be matched to (POST /api/leader-match). */
+    leadPeople?: LeadPersonJson[];
   };
   generatedAt: string;
 }
@@ -80,6 +91,7 @@ export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow): LeaderAdminJso
     isStaff: l.isAdmin,
     canManage: canManageLink(viewer, l),
     isYou: l.id === viewer.id,
+    matched: l.chmsIndividualId !== null,
   };
 }
 
@@ -180,13 +192,16 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
         .sort(byName),
     };
     // Link management is for staff (is_admin) only, never for implicit queue-manager admins.
-    if (leader.isAdmin) out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader)).sort(byName);
+    if (leader.isAdmin) {
+      out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader)).sort(byName);
+      out.admin.leadPeople = availableLeadPeople(leaders, peopleSeen(snapshot));
+    }
   }
   return out;
 }
 
 export interface ResolveMeInput {
-  store: Pick<Store, 'upsertLeaders' | 'listLeaders'>;
+  store: Pick<Store, 'upsertLeaders' | 'listLeaders' | 'applyMatches'>;
   config: HolyNudgeConfig;
   leader: LeaderRow;
   now: Date;
@@ -212,8 +227,8 @@ export async function resolveMe({ store, config, leader, now, loadSnapshot }: Re
   let leaders = [leader];
   if (leader.isAdmin) {
     // Staff manage everyone's link: make sure every leader in ChMS has a row (with no link yet)
-    // even before the first daily run.
-    await store.upsertLeaders(peopleSeen(snapshot));
+    // even before the first daily run, and tie leaders added by name to their Lead person where certain.
+    await syncLeaders(store, peopleSeen(snapshot));
     leaders = await store.listLeaders();
   } else if (isAdminFor(leader, config, snapshot, now)) {
     // Queue-manager admins see notification status for their leaders; no link features.

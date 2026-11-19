@@ -12,7 +12,7 @@ const config = (over: Parameters<typeof baseConfig>[0] = {}) => baseConfig({ dat
 
 const NOW = new Date('2026-01-15T14:00:00Z');
 const row = (over: Partial<LeaderRow>): LeaderRow => ({
-  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, ...over,
+  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, ...over,
 });
 
 const lee = person('L1', 'Lee');
@@ -72,8 +72,9 @@ describe('GET /api/me response', () => {
     expect(a.byLeader[1]!.items[0]!.due).toBe('2026-01-14');
     expect(a.byLeader[1]!.items[0]!.daysOverdue).toBe(1);
     expect(a.leadersWithoutNotifications).toEqual([{ name: 'Liv' }]);
-    // Implicit (queue-manager) admins get no link features at all.
+    // Implicit (queue-manager) admins get no link or match features at all.
     expect('leaders' in a).toBe(false);
+    expect('leadPeople' in a).toBe(false);
     expect(JSON.stringify(me)).not.toMatch(/\/l\/|"url"|token/i);
     for (const i of [...a.staleUnassigned, ...a.byLeader.flatMap((g) => g.items)]) expect(Object.keys(i.individual)).toEqual(['name', 'phone']);
   });
@@ -88,10 +89,13 @@ describe('GET /api/me response', () => {
     const me = buildMe({ config: cfg, snapshot: snap, leader: owner, leaders, now: NOW });
     expect(me.admin!.byLeader.length).toBeGreaterThan(1);
     expect(me.admin!.leaders).toEqual([
-      { id: 5, name: 'Ava', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false },
-      { id: 9, name: 'Owner', hasLink: true, lastSeenAt: '2026-01-15T13:00:00.000Z', notificationsOn: true, isStaff: true, canManage: true, isYou: true },
-      { id: 4, name: 'Staffer', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: true, canManage: true, isYou: false },
+      { id: 5, name: 'Ava', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false },
+      { id: 9, name: 'Owner', hasLink: true, lastSeenAt: '2026-01-15T13:00:00.000Z', notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: false },
+      { id: 4, name: 'Staffer', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: false },
     ]);
+    // Every Lead person seen is free to match here (no row holds any of them).
+    expect(me.admin!.leadPeople!.length).toBeGreaterThan(5);
+    for (const p of me.admin!.leadPeople!) expect(Object.keys(p)).toEqual(['id', 'name']);
     // A non-owner staff member cannot manage the owner's row.
     const asStaff = buildMe({ config: cfg, snapshot: snap, leader: staff, leaders, now: NOW });
     expect(asStaff.admin!.leaders!.find((l) => l.id === 9)!.canManage).toBe(false);

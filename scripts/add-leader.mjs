@@ -65,4 +65,5 @@ if (existing) {
   d1(S, where, `INSERT INTO leaders (chms_individual_id, name, token_hash, is_admin, is_owner) VALUES (${q(chmsId)}, ${q(a.name)}, ${q(hash)}, ${admin}, ${owner});`);
   console.log(`${a.name}${chmsId ? ` (${chmsId})` : ''}${flags}: added.`);
   console.log(`Personal link (shown once, send it now): ${baseUrl}/l/${token}`);
+  if (!chmsId) console.log('Not matched to Lead yet: matched automatically if exactly one Lead person has this exact name, or by staff from the Team tab.');
 }

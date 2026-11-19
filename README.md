@@ -40,7 +40,7 @@ curl -X POST 'http://localhost:8787/run?force=1' -H "X-Job-Trigger-Key: <JOB_TRI
 npm test && npm run typecheck
 ```
 
-Open the printed `http://localhost:8788/l/<token>` link (printed once; run `add-leader` again with `--new-link` for another). Push needs real Google Chrome (or Safari/Firefox); Playwright's bundled Chromium cannot subscribe. On localhost, `?mock=leader` or `?mock=admin` shows the views with built-in sample data and no API. Before-launch (non-staff) previews: `?mock=prelaunch` (starts at onboarding; add `&fake=1` to click through to the finished screen), `?mock=prelaunch-off` (notifications not on: the "finish setting up" screen) and `?mock=prelaunch-done` (the "you're all set" screen). `?mock=admin-sample` shows staff with the "sample data" note. `&sim=ios-safari`, `&sim=denied` etc. still override the device situation.
+Open the printed `http://localhost:8788/l/<token>` link (printed once; run `add-leader` again with `--new-link` for another). Push needs real Google Chrome (or Safari/Firefox); Playwright's bundled Chromium cannot subscribe. On localhost, `?mock=leader` or `?mock=admin` shows the views with built-in sample data and no API. Before-launch (non-staff) previews: `?mock=prelaunch` (starts at onboarding; add `&fake=1` to click through to the finished screen), `?mock=prelaunch-off` (notifications not on: the "finish setting up" screen) and `?mock=prelaunch-done` (the "you're all set" screen). `?mock=admin-sample` shows staff with the "sample data" note. With either, `&tab=team` opens the Team tab and `&match=17` opens the Lead chooser on a leader who is not matched yet (`&match=11` on one who is). `&sim=ios-safari`, `&sim=denied` etc. still override the device situation.
 
 ## Deploy
 
@@ -103,12 +103,14 @@ Pushpay refresh tokens are single-use. If one is ever lost (a refresh response t
 
 The daily job creates a leader row for everyone it sees as an assignee or queue manager, but **without a link**. Staff (rows flagged `--admin`, which includes the owner) can also add someone who is not in ChMS yet from the Team tab: type their name under **Add a leader** and the app makes their row and first link (shown once, with Copy and Email). Choose **Servant leader** (default: sees only students assigned to them) or **Staff** (sees every queue, can add people and manage links; the app asks you to confirm first). It never makes an owner, and a name already on the list is refused (use **New link** on that row). Staff open the Team tab, find the leader under "Team" and tap **New link**: the link is shown once, with Copy and Email. Making a new link turns the old one off. **Turn off link** stops a link at once and removes that leader's notifications. Only the owner can change the owner's link, and nobody can turn off their own link from the app (make yourself a new one instead). Each row shows a bell for notifications (a bell with a strike through it means off) and a Staff chip for staff. Queue managers who are not staff see their queues' summary and who has not turned on notifications, but have no link controls.
 
+**Matching to Lead.** What a leader sees comes from their ChMS ("Lead") identity, and someone added by name has none, so the app ties them to their Lead person. Automatically (every morning run and every staff page view): a row with no ChMS id is matched when its name equals a Lead person's name (ignoring case and extra spaces), nobody else without a ChMS id has that name, no other Lead person has that name, and that Lead person is not already held by a row in use (a working link, staff or owner, or devices). The row with the link keeps everything (link, notifications, role, last opened) and takes the ChMS id; the spare row the app had made for that person from Lead data is removed. Anything less certain is left alone, because a wrong match would show one leader another leader's students. Staff see a quiet "Not matched to Lead" chip on such rows: **Match** opens a list of Lead people nobody is matched to yet (similar names first). **Lead match** on a matched row changes or clears it; clearing keeps the link, and a row whose match staff set or cleared by hand is never changed automatically again. Only the owner can change the owner's match. A Lead person shows up only once they appear in Lead data (assigned a student, or managing a queue). While on sample data the list holds the sample people; any match made to one points at a made-up person, so clear it (or match again) once real data is connected.
+
 From the command line (prints a link only when it makes one, and only once):
 
 ```sh
 npm run add-leader -- --name "Name" --chms-id <ChMS individual id> [--admin] [--owner] [--new-link] --remote
 npm run revoke-leader -- (--id <leader id> | --chms-id <ChMS id>) --remote
-npm run list-leaders -- [--stale-days 60] --remote      # no tokens; --stale-days lists links not used in N days
+npm run list-leaders -- [--stale-days 60] --remote      # no tokens; shows Lead match; --stale-days lists links not used in N days
 ```
 
 `add-leader` on someone who already exists updates their name and raises flags but keeps their link, unless you pass `--new-link`. `--admin` makes them staff (whole-process view and link management); `--owner` adds failure alerts. While `dataSource` is `fixture`, `--chms-id` may be left out (a real volunteer before launch) or must be one of the sample ids in `fixtures/people.json`; and only staff see sample data or get sample nudges. Everyone else is set up for notifications and sees a "you're all set" screen until real data is connected (`dataSource` is not `fixture`). Admin and owner rows keep the name you give them; other names follow ChMS.
@@ -118,7 +120,7 @@ Email each leader their link once. On iPhone: open it in Safari, tap Share, then
 ## Data handling
 
 What is stored (D1, the only database):
-- Leaders: name, ChMS individual id, staff/owner flags, SHA-256 hash of their link token (never the link itself), when they last opened the app, whether the link was turned off.
+- Leaders: name, ChMS individual id, staff/owner flags, SHA-256 hash of their link token (never the link itself), when they last opened the app, whether the link was turned off, whether staff set their Lead match by hand.
 - Push subscriptions: the browser's push endpoint and keys, per leader.
 - Pushpay OAuth tokens: AES-256-GCM encrypted under `TOKEN_ENC_KEY` (a Cloudflare secret, not in D1).
 - Job runs: counts, and on failure the stage, reason and error class name.

@@ -1,3 +1,4 @@
+import { holdsLeadPerson, type Merge } from '../src/core/match';
 import type { JobRunSummary, LeaderRow, NewSubscription, Store, SubscriptionRow } from '../src/db';
 import type { PushPayload } from '../src/push/payload';
 import type { PushSender, SendResult } from '../src/push/sender';
@@ -24,7 +25,7 @@ export class FakeStore implements Store {
   addLeader(over: Partial<Omit<FakeLeader, 'id'>> & { name: string }, devices = 0): number {
     const id = this.nextId++;
     this.leaders.push({
-      id, chmsIndividualId: null, linkToken: `tok-${id}`, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, ...over,
+      id, chmsIndividualId: null, linkToken: `tok-${id}`, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, matchByHand: false, ...over,
     });
     for (let i = 0; i < devices; i++) this.subs.push({ id: this.nextId++, leaderId: id, endpoint: `https://push.example/${id}/${i}`, p256dh: 'k', auth: 'a' });
     return id;
@@ -44,6 +45,39 @@ export class FakeStore implements Store {
   }
   async listLeaders(): Promise<LeaderRow[]> {
     return this.leaders.map((l) => this.row(l));
+  }
+  private spare(dropId: number, chmsId: string, keepId: number): FakeLeader | null {
+    const d = this.leaders.find((l) => l.id === dropId && l.id !== keepId && l.chmsIndividualId === chmsId);
+    return d && !holdsLeadPerson(this.row(d)) ? d : null;
+  }
+  async applyMatches(merges: Merge[]) {
+    let n = 0;
+    for (const m of merges) {
+      const keep = this.leaders.find((l) => l.id === m.keepId && l.chmsIndividualId === null && !l.matchByHand);
+      if (!keep) continue;
+      if (m.dropId !== null) {
+        const d = this.spare(m.dropId, m.chmsId, m.keepId);
+        if (d) this.leaders = this.leaders.filter((l) => l !== d);
+      }
+      if (this.leaders.some((l) => l.chmsIndividualId === m.chmsId)) continue;
+      keep.chmsIndividualId = m.chmsId;
+      n++;
+    }
+    return n;
+  }
+  async setMatch(leaderId: number, chmsId: string | null, dropId: number | null) {
+    const keep = this.leaders.find((l) => l.id === leaderId);
+    if (!keep) return false;
+    if (chmsId !== null) {
+      if (dropId !== null) {
+        const d = this.spare(dropId, chmsId, leaderId);
+        if (d) this.leaders = this.leaders.filter((l) => l !== d);
+      }
+      if (this.leaders.some((l) => l.chmsIndividualId === chmsId && l.id !== leaderId)) return false;
+    }
+    keep.chmsIndividualId = chmsId;
+    keep.matchByHand = true;
+    return true;
   }
   async leaderById(id: number) {
     const l = this.leaders.find((x) => x.id === id);

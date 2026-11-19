@@ -16,7 +16,8 @@
   /* localhost only: leader | admin | invalid | empty, plus the pre-launch previews
      (real data not connected yet): prelaunch (a non-staff leader, starts at onboarding; add &fake=1 to click through),
      prelaunch-off (non-staff, notifications not on: the "finish setting up" screen),
-     prelaunch-done (non-staff, all set up: the "you're all set" screen), admin-sample (staff seeing sample data). */
+     prelaunch-done (non-staff, all set up: the "you're all set" screen), admin-sample (staff seeing sample data).
+     With admin or admin-sample, &tab=team opens the Team tab and &match=<leader id> opens that row's Lead chooser. */
   var mock = isLocal ? query.get('mock') : null;
   var mockPrelaunch = mock === 'prelaunch' || mock === 'prelaunch-off' || mock === 'prelaunch-done';
   var sim = isLocal ? query.get('sim') : null; // onboarding situation overrides, localhost only
@@ -224,16 +225,28 @@
   }
 
   var hoursAgo = function (h) { return new Date(Date.now() - h * 3600000).toISOString(); };
-  // All made up. A mix on purpose: staff and servant leaders, notifications on and off, one with no working link.
+  // All made up. A mix on purpose: staff and servant leaders, notifications on and off, one with no working link,
+  // two added by name and not matched to Lead yet (17, 18), and the owner unmatched (15, which other staff can't change).
   var mockLeaders = [
-    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false },
-    { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false },
-    { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, isStaff: true, canManage: true, isYou: true },
-    { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, isStaff: false, canManage: true, isYou: false },
-    { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, isStaff: true, canManage: false, isYou: false },
-    { id: 16, name: 'Avery Placeholder', hasLink: true, lastSeenAt: hoursAgo(50), notificationsOn: false, isStaff: true, canManage: true, isYou: false },
-    { id: 17, name: 'Jordan Notreal', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false },
-    { id: 18, name: 'Taylor Testwell', hasLink: true, lastSeenAt: hoursAgo(5), notificationsOn: true, isStaff: false, canManage: true, isYou: false },
+    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true },
+    { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true },
+    { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: true },
+    { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: true },
+    { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, isStaff: true, canManage: false, isYou: false, matched: false },
+    { id: 16, name: 'Avery Placeholder', hasLink: true, lastSeenAt: hoursAgo(50), notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: true },
+    { id: 17, name: 'Jordan Notreal', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false },
+    { id: 18, name: 'Taylor Testwell', hasLink: true, lastSeenAt: hoursAgo(5), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: false },
+  ];
+
+  // Lead people nobody with a link is matched to yet (made up). Near-misses on purpose: an exact name would
+  // already have been matched by the server.
+  var mockLeadPeople = [
+    { id: 'P301', name: 'Blair Imaginary' },
+    { id: 'P302', name: 'Casey Notreal' },
+    { id: 'P303', name: 'Jordan Notrealson' },
+    { id: 'P304', name: 'Morgan Fakerson' },
+    { id: 'P305', name: 'Robin Pretendly' },
+    { id: 'P306', name: 'Taylor Testwell-Mock' },
   ];
 
   var mockAdded = []; // people "added" in a mock session (so a repeat name answers name_taken)
@@ -268,7 +281,10 @@
         ],
         leadersWithoutNotifications: [{ name: 'Devon Mockford' }, { name: 'Lee Madeup' }],
       };
-      if (!manager) me.admin.leaders = mockLeaders;
+      if (!manager) {
+        me.admin.leaders = mockLeaders;
+        me.admin.leadPeople = mockLeadPeople.slice();
+      }
     }
     return me;
   }
@@ -289,6 +305,21 @@
           return resolve({ url: location.origin + '/l/' + fake, self: !!row.isYou });
         }
         if (path === '/api/leader-revoke' && method === 'POST') return resolve({ ok: true });
+        if (path === '/api/leader-match' && method === 'POST') {
+          var who = mockLeaders.filter(function (l) { return l.id === (body && body.leaderId); })[0];
+          if (!who) return reject(new ApiError(404, 'not_found'));
+          if (!who.canManage) return reject(new ApiError(403, 'owner_protected'));
+          if (!who.hasLink) return reject(new ApiError(400, 'no_link'));
+          if (body.chmsId === null) {
+            who.matched = false;
+            return resolve({ ok: true, matched: false });
+          }
+          var pick = mockLeadPeople.filter(function (p) { return p.id === body.chmsId; })[0];
+          if (!pick) return reject(new ApiError(404, 'unknown_person'));
+          mockLeadPeople = mockLeadPeople.filter(function (p) { return p !== pick; });
+          who.matched = true;
+          return resolve({ ok: true, matched: true });
+        }
         if (path === '/api/leader-add' && method === 'POST') {
           var nm = String((body && body.name) || '').replace(/\s+/g, ' ').trim();
           var taken = mockLeaders.concat(mockAdded).some(function (l) { return l.name.toLowerCase() === nm.toLowerCase(); });
@@ -472,7 +503,19 @@
     addRole: 'leader', // leader | staff: the role chosen in the add form
     addName: '', // what is typed in the add form (survives a re-render)
     addOpen: false, // add form is tucked behind an "Add a leader" button until tapped
+    matchOpen: null, // id of the leader whose Lead chooser is open (staff)
+    matchChoice: '', // the Lead person picked in that chooser (survives a re-render)
+    matchNote: {}, // leader id -> short note after a match change ("Matched to ...")
   };
+  if (mock) {
+    var mockTab = query.get('tab');
+    if (mockTab === 'mine' || mockTab === 'unassigned' || mockTab === 'behind' || mockTab === 'team') S.tab = mockTab;
+    var mockMatch = Number(query.get('match'));
+    if (mockMatch > 0) {
+      S.tab = 'team';
+      S.matchOpen = mockMatch;
+    }
+  }
 
   /* Real data is not connected yet and this is not staff: there is no student list to show, only setup. */
   function isPreLaunch() {
@@ -1150,12 +1193,21 @@
     return Array.isArray(a.leaders) ? teamNotificationsOff(a.leaders).length : a.leadersWithoutNotifications.length;
   }
 
+  /* People with a working link who aren't tied to a Lead person, so once live they'd see no students. */
+  function teamUnmatched(leaders) {
+    return leaders.filter(function (l) { return l.hasLink && l.matched === false; });
+  }
+
   function teamSummary(leaders) {
     var linked = leaders.filter(function (l) { return l.hasLink; }).length;
     var off = teamNotificationsOff(leaders).length;
     if (!linked) return 'Nobody has a link yet. Add someone, or make a link on their row.';
-    if (!off) return 'Everyone with a link has notifications on.';
-    return off + ' of ' + linked + ' ' + plural(linked, 'person', 'people') + ' with a link ' + plural(off, 'hasn’t', 'haven’t') + ' turned on notifications yet.';
+    var text = !off
+      ? 'Everyone with a link has notifications on.'
+      : off + ' of ' + linked + ' ' + plural(linked, 'person', 'people') + ' with a link ' + plural(off, 'hasn’t', 'haven’t') + ' turned on notifications yet.';
+    var unmatched = teamUnmatched(leaders).length;
+    if (unmatched) text += ' ' + unmatched + ' ' + plural(unmatched, 'person isn’t', 'people aren’t') + ' matched to Lead yet.';
+    return text;
   }
 
   function teamView() {
@@ -1431,11 +1483,158 @@
     );
   }
 
+  /* ---- matching a leader to their Lead (ChMS) person (staff) ---- */
+
+  function openMatch(l) {
+    S.matchOpen = l.id;
+    S.matchChoice = '';
+    delete S.matchNote[l.id];
+    renderInPlace();
+    var el = document.getElementById('match-select-' + l.id);
+    if (el) el.focus();
+  }
+
+  function closeMatch() {
+    S.matchOpen = null;
+    S.matchChoice = '';
+    renderInPlace();
+  }
+
+  function nameWords(name) {
+    return String(name || '').toLowerCase().split(/[\s\-]+/).filter(function (w) { return w.length > 1; });
+  }
+
+  /* Lead people whose name shares a word with this leader's name come first, as likely matches. */
+  function likelyFirst(l, people) {
+    var mine = nameWords(l.name);
+    var likely = [];
+    var rest = [];
+    people.forEach(function (p) {
+      var shared = nameWords(p.name).some(function (w) { return mine.indexOf(w) !== -1; });
+      (shared ? likely : rest).push(p);
+    });
+    return { likely: likely, rest: rest };
+  }
+
+  function matchErrorWords(e) {
+    var code = e instanceof ApiError ? e.code : '';
+    if (code === 'person_taken') return 'Someone else is already matched to that person. Try Refresh.';
+    if (code === 'unknown_person') return 'We couldn’t find that person in Lead any more. Try Refresh.';
+    if (code === 'no_link') return 'Make them a link first, then match them.';
+    if (code === 'invalid_person') return 'Choose who they are in Lead first.';
+    if (code === 'owner_protected') return 'Only the owner can change the owner’s match.';
+    if (code === 'forbidden') return 'Only staff can match leaders.';
+    return linkErrorWords(e);
+  }
+
+  /* After a change, refresh quietly from the server without jumping back to the top. */
+  function refreshInPlace() {
+    var y = window.scrollY;
+    return load(true).then(function () { window.scrollTo(0, y); });
+  }
+
+  function sendMatch(l, chmsId, personName, btn, statusEl) {
+    btn.disabled = true;
+    statusEl.className = 'status-line small';
+    statusEl.textContent = chmsId === null ? 'Clearing…' : 'Matching…';
+    api('/api/leader-match', { method: 'POST', body: { leaderId: l.id, chmsId: chmsId } })
+      .then(function (res) {
+        l.matched = !!res.matched;
+        if (chmsId !== null && Array.isArray(S.me.admin.leadPeople)) {
+          S.me.admin.leadPeople = S.me.admin.leadPeople.filter(function (p) { return p.id !== chmsId; });
+        }
+        S.matchNote[l.id] = chmsId === null ? 'Match cleared. Their link still works.' : 'Matched to ' + personName + ' in Lead.';
+        S.matchOpen = null;
+        S.matchChoice = '';
+        renderInPlace();
+        refreshInPlace();
+      })
+      .catch(function (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          S.view = 'invalid';
+          return render();
+        }
+        btn.disabled = false;
+        statusEl.className = 'status-line small err';
+        statusEl.textContent = matchErrorWords(e);
+      });
+  }
+
+  /* The chooser: pick who this leader is in Lead (likely names first), then confirm. Clear sits here too. */
+  function matchPanel(l) {
+    var people = Array.isArray(S.me.admin.leadPeople) ? S.me.admin.leadPeople : [];
+    var statusEl = h('p', { class: 'status-line small', role: 'status' });
+    var cancelBtn = h('button', { class: 'btn small-btn link', type: 'button', onclick: closeMatch }, 'Cancel');
+    var clearBtn = null;
+    if (l.matched) {
+      clearBtn = h('button', { class: 'btn small-btn link', type: 'button' }, 'Clear match');
+      clearBtn.addEventListener('click', function () {
+        if (!window.confirm('Clear ' + l.name + '’s Lead match? Their link keeps working, but once real data is connected they won’t see any students until they’re matched again.')) return;
+        sendMatch(l, null, '', clearBtn, statusEl);
+      });
+    }
+    var head = h('p', { class: 'small' }, l.matched ? 'Match ' + firstName(l.name) + ' to someone else in Lead, or clear the match.' : 'Who is ' + l.name + ' in Lead? Once real data is connected, they’ll see the students assigned to that person.');
+    var sampleNote = S.me.live === false ? h('p', { class: 'muted small' }, 'You’re seeing sample data, so these are made-up people.') : null;
+
+    if (!people.length) {
+      return h(
+        'div',
+        { class: 'match-panel' },
+        head,
+        sampleNote,
+        h('p', { class: 'muted small' }, 'Nobody in Lead is free to match right now. People show up here once they have a student assigned or manage a queue.'),
+        h('div', { class: 'btns' }, clearBtn, cancelBtn),
+        statusEl
+      );
+    }
+
+    var groups = likelyFirst(l, people);
+    var option = function (p) { return h('option', { value: p.id, selected: S.matchChoice === p.id }, p.name); };
+    var select = h(
+      'select',
+      { class: 'text-input select-input', id: 'match-select-' + l.id, name: 'lead-person' },
+      h('option', { value: '' }, 'Choose a person…'),
+      groups.likely.length ? h('optgroup', { label: 'Similar names' }, groups.likely.map(option)) : null,
+      groups.rest.length ? (groups.likely.length ? h('optgroup', { label: 'Everyone else' }, groups.rest.map(option)) : groups.rest.map(option)) : null
+    );
+    select.addEventListener('change', function () { S.matchChoice = select.value; });
+    var saveBtn = h('button', { class: 'btn small-btn primary', type: 'submit' }, l.matched ? 'Change match' : 'Match');
+    var form = h(
+      'form',
+      { class: 'match-form', novalidate: true },
+      h('label', { class: 'field-label', for: 'match-select-' + l.id }, 'Person in Lead'),
+      select,
+      h('div', { class: 'btns' }, saveBtn, clearBtn, cancelBtn),
+      statusEl
+    );
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var chosen = people.filter(function (p) { return p.id === select.value; })[0];
+      if (!chosen) {
+        statusEl.className = 'status-line small err';
+        statusEl.textContent = 'Choose who they are in Lead first.';
+        return;
+      }
+      if (!window.confirm('Match ' + l.name + ' to ' + chosen.name + ' in Lead? They’ll see the students assigned to ' + chosen.name + '.')) return;
+      sendMatch(l, chosen.id, chosen.name, saveBtn, statusEl);
+    });
+    return h('div', { class: 'match-panel' }, head, sampleNote, form);
+  }
+
   function leaderRow(l) {
     var statusEl = h('p', { class: 'status-line small', role: 'status' });
+    if (S.matchNote[l.id]) {
+      statusEl.className = 'status-line small ok';
+      statusEl.textContent = S.matchNote[l.id];
+    }
     var minted = l.id === S.justAdded ? null : S.minted[l.id]; // the just-added person's link shows under the add form
+    var unmatched = l.hasLink && l.matched === false;
+    var choosing = S.matchOpen === l.id && l.canManage && l.hasLink;
     var btns = [];
     if (l.canManage) {
+      if (unmatched && !choosing) {
+        btns.push(h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'Match ' + l.name + ' to a person in Lead', onclick: function () { openMatch(l); } }, 'Match'));
+      }
       var mintBtn = h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'New link for ' + l.name }, 'New link');
       mintBtn.addEventListener('click', function () { mintLink(l, mintBtn, statusEl); });
       btns.push(mintBtn);
@@ -1443,6 +1642,10 @@
         var offBtn = h('button', { class: 'btn small-btn', type: 'button', 'aria-label': 'Turn off the link for ' + l.name }, 'Turn off link');
         offBtn.addEventListener('click', function () { revokeLink(l, offBtn, statusEl); });
         btns.push(offBtn);
+      }
+      // Changing or clearing an existing match is rare: a quiet text button.
+      if (l.hasLink && l.matched === true && !choosing) {
+        btns.push(h('button', { class: 'btn small-btn link', type: 'button', 'aria-label': 'Change the Lead match for ' + l.name, onclick: function () { openMatch(l); } }, 'Lead match'));
       }
     }
     return h(
@@ -1454,11 +1657,18 @@
         h('span', { class: 'name' }, l.name, l.isYou ? h('span', { class: 'you' }, ' (you)') : null),
         h('span', { class: 'bell' + (l.notificationsOn ? '' : ' off'), role: 'img', 'aria-label': l.notificationsOn ? 'Notifications on' : 'Notifications off', title: l.notificationsOn ? 'Notifications on' : 'Notifications off' })
       ),
-      l.isStaff || !l.hasLink
-        ? h('div', { class: 'meta' }, l.isStaff ? h('span', { class: 'chip staff' }, 'Staff') : null, l.hasLink ? null : h('span', { class: 'chip' }, 'no working link'))
+      l.isStaff || !l.hasLink || unmatched
+        ? h(
+            'div',
+            { class: 'meta' },
+            l.isStaff ? h('span', { class: 'chip staff' }, 'Staff') : null,
+            l.hasLink ? null : h('span', { class: 'chip' }, 'no working link'),
+            unmatched ? h('span', { class: 'chip unmatched' }, 'Not matched to Lead') : null
+          )
         : null,
       h('p', { class: 'muted small' }, lastSeenWords(l.lastSeenAt)),
       minted ? mintedPanel(l, minted) : null,
+      choosing ? matchPanel(l) : null,
       btns.length ? h('div', { class: 'btns' }, btns) : h('p', { class: 'muted small' }, 'Only the owner can change this link.'),
       statusEl
     );

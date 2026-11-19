@@ -488,6 +488,23 @@ details.group > .list { padding: 4px 4px 8px; }
 .role-option:has(input:checked) { border-color: var(--line-strong); background: var(--accent-soft); }
 .role-option:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
 
+/* ---------- matching a leader to Lead (staff) ---------- */
+
+/* Calm, not an alarm: an outlined chip in the muted text colour. */
+.chip.unmatched { background: transparent; box-shadow: inset 0 0 0 1px var(--line-strong); }
+.match-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+}
+.match-form { display: grid; gap: 8px; }
+.match-panel .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.select-input { width: 100%; flex: none; }
+.match-panel > .status-line:empty, .match-form > .status-line:empty { display: none; }
+
 /* ---------- small layout helpers (instead of style attributes, so the CSP needs no 'unsafe-inline') ---------- */
 
 .gap-top { margin-top: 8px; }

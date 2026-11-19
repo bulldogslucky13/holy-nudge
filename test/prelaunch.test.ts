@@ -13,7 +13,7 @@ import { config } from './helpers';
 
 const NOW = new Date('2026-01-15T14:00:00Z'); // 08:00 CST
 const row = (over: Partial<LeaderRow>): LeaderRow => ({
-  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, ...over,
+  id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, ...over,
 });
 
 const fixtureCfg = loadConfig(); // the bundled config; asserted below to be the fixture one
@@ -48,6 +48,9 @@ describe('/api/me while not live', () => {
       listLeaders: vi.fn(async () => {
         throw new Error('no leader list for non-staff');
       }),
+      applyMatches: vi.fn(async () => {
+        throw new Error('no matching for non-staff');
+      }),
     };
     let sawBehind = 0;
     for (const [chmsId, name] of people) {
@@ -71,6 +74,7 @@ describe('/api/me while not live', () => {
     expect(loader).not.toHaveBeenCalled();
     expect(store.upsertLeaders).not.toHaveBeenCalled();
     expect(store.listLeaders).not.toHaveBeenCalled();
+    expect(store.applyMatches).not.toHaveBeenCalled();
   });
 
   it('buildMe itself refuses to show sample data to non-staff, even when handed a full snapshot', async () => {

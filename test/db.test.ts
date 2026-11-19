@@ -3,7 +3,7 @@ import { createD1Store, hashToken } from '../src/db';
 import { readText } from './files';
 import { createTestD1 } from './sqlite-d1';
 
-const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql'];
+const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql'];
 
 describe('D1 store: upsertLeaders', () => {
   it('adds unknown people WITHOUT a link, renames plain leaders, and keeps hand-given admin/owner names and links', async () => {
@@ -54,6 +54,32 @@ describe('migration 0003 (hashed link tokens)', () => {
     // New ids continue after the old ones.
     t.sqlite.exec("INSERT INTO leaders (name) VALUES ('New')");
     expect(t.sqlite.prepare("SELECT id FROM leaders WHERE name = 'New'").get()).toEqual({ id: 3 });
+  });
+});
+
+describe('migration 0004 (Lead match by hand)', () => {
+  it('adds match_by_hand = 0 to every row and keeps every leader, link and push subscription', async () => {
+    const t = await createTestD1('migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql');
+    t.sqlite.exec(
+      "INSERT INTO leaders (id, chms_individual_id, name, token, token_hash, is_admin, is_owner, last_seen_at, revoked_at) VALUES " +
+        "(1, NULL, 'Owner', 'legacy-owner-token-0123456789', NULL, 1, 1, '2026-11-18T14:00:00.000Z', NULL), " +
+        "(2, 'L101', 'Lee', NULL, 'abc123', 0, 0, NULL, NULL), (3, 'L102', 'Off', NULL, NULL, 0, 0, NULL, '2026-11-01T00:00:00.000Z');" +
+        "INSERT INTO push_subscriptions (id, leader_id, endpoint, p256dh, auth) VALUES (7, 1, 'https://web.push.apple.com/owner', 'k', 'a'), (8, 2, 'https://fcm.googleapis.com/x', 'k2', 'a2');" +
+        "INSERT INTO rate_limits (leader_id, bucket, window_start, count) VALUES (1, 'me', 0, 3);",
+    );
+    const before = {
+      leaders: t.sqlite.prepare('SELECT * FROM leaders ORDER BY id').all(),
+      subs: t.sqlite.prepare('SELECT * FROM push_subscriptions ORDER BY id').all(),
+      rate: t.sqlite.prepare('SELECT * FROM rate_limits').all(),
+    };
+    t.sqlite.exec(await readText('migrations/0004_lead_match.sql'));
+    expect(t.sqlite.prepare('SELECT * FROM leaders ORDER BY id').all()).toEqual(before.leaders.map((r) => ({ ...r, match_by_hand: 0 })));
+    expect(t.sqlite.prepare('SELECT * FROM push_subscriptions ORDER BY id').all()).toEqual(before.subs);
+    expect(t.sqlite.prepare('SELECT * FROM rate_limits').all()).toEqual(before.rate);
+    expect(t.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    // The store reads it, and the owner's legacy link still works.
+    const store = createD1Store(t.db);
+    expect(await store.leaderByToken('legacy-owner-token-0123456789')).toMatchObject({ id: 1, isOwner: true, matchByHand: false, subscriptionCount: 1 });
   });
 });
 
