@@ -6,6 +6,10 @@ name = "holy-nudge"
 pages_build_output_dir = "public"
 compatibility_date = "2026-11-17"
 
+# Non-secret settings. CHMS_SUBDOMAIN makes the Pushpay approval page skip "Enter your church's subdomain".
+[vars]
+CHMS_SUBDOMAIN = "wildwood"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "holy-nudge"

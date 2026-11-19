@@ -77,7 +77,7 @@ npx wrangler d1 execute holy-nudge --remote --command "SELECT * FROM job_runs OR
    CHMS_AUTH_HOST = "https://beta-oauth.ccbchurch.com"
    CHMS_API_HOST = "https://api-beta.ccbchurch.com"
    ```
-   Remove them for production (the defaults are `oauth.ccbchurch.com` and `api.ccbchurch.com`). Optional `CHMS_SUBDOMAIN = "wildwood"` skips the church prompt on the approval page.
+   Remove them for production (the defaults are `oauth.ccbchurch.com` and `api.ccbchurch.com`). `CHMS_SUBDOMAIN = "wildwood"` is already set in `wrangler.toml` (the site builds the approval link), so the Master Admin is not asked for the church subdomain.
 3. Redeploy both (`npm run deploy && npm run deploy:cron`) so the new secrets and vars are picked up.
 4. Send the church's Master Admin to `https://holynudge.cameronbristol.xyz/oauth/start?key=<OAUTH_SETUP_KEY>` (the key is in `.secrets.local`). They approve in Pushpay and land on "Holy Nudge is connected". The redirect URI is fixed to `https://holynudge.cameronbristol.xyz/oauth/callback`, exactly as registered.
 5. Set `"dataSource": "pushpay"` in `config/holy-nudge.config.json`, redeploy both, and force a run. If ChMS returns fewer people than its own queue counts, the run fails and you get an alert rather than nudges from partial data.
