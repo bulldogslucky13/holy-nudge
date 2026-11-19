@@ -441,9 +441,10 @@ details.group > .list { padding: 4px 4px 8px; }
 .match-icon {
   position: relative;
   display: inline-block;
-  vertical-align: middle;
-  width: 16px;
-  height: 16px;
+  /* Centre on the capitals, not the x-height: Montserrat caps are 0.7em tall, so a 1em icon sits 0.15em below the baseline. */
+  vertical-align: -0.15em;
+  width: 1em;
+  height: 1em;
   margin: 0 0 0 6px;
   padding: 0;
   border: 0;
