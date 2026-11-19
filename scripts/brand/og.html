@@ -1,0 +1,79 @@
+<!doctype html>
+<!-- Source for public/og.png (link previews). Rendered by scripts/gen-brand-assets.mjs --og.
+     Generic on purpose: never put a name, a count or anything from data in here. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face {
+    font-family: "Montserrat";
+    src: url("../../public/fonts/montserrat-latin-wght.woff2") format("woff2");
+    font-weight: 100 900;
+  }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    background: #29303E;
+    color: #FFFFFF;
+    font-family: "Montserrat", sans-serif;
+    display: flex;
+    align-items: center;
+    position: relative;
+  }
+  .frame {
+    position: absolute;
+    inset: 28px;
+    border: 2px solid rgba(157, 184, 163, 0.45);
+    border-radius: 36px;
+  }
+  .row { display: flex; align-items: center; gap: 64px; padding-left: 104px; position: relative; }
+  .tile {
+    width: 260px;
+    height: 260px;
+    border-radius: 58px;
+    box-shadow: 0 0 0 3px #68866F;
+    display: block;
+  }
+  .lockup { display: grid; gap: 0; }
+  .holy {
+    font-weight: 900;
+    font-size: 132px;
+    line-height: 0.95;
+    letter-spacing: 0.04em;
+    color: #FFFFFF;
+  }
+  .nudge {
+    font-weight: 400;
+    font-size: 101px;
+    line-height: 1;
+    letter-spacing: 0.06em;
+    color: #9DB8A3;
+  }
+  .rule { width: 88px; height: 4px; border-radius: 2px; background: #68866F; margin: 30px 0 24px; }
+  .line { font-weight: 600; font-size: 25px; letter-spacing: 0.16em; text-transform: uppercase; color: #E7ECE8; }
+  .sprig {
+    position: absolute;
+    right: 64px;
+    top: 56px;
+    width: 104px;
+    height: 104px;
+    background: #68866F;
+    -webkit-mask: url("../../public/sprig.svg") center / contain no-repeat;
+    mask: url("../../public/sprig.svg") center / contain no-repeat;
+    opacity: 0.8;
+  }
+</style>
+</head>
+<body>
+  <div class="frame"></div>
+  <div class="row">
+    <img class="tile" src="../../public/icon.svg" alt="">
+    <div class="lockup">
+      <div class="holy">HOLY</div>
+      <div class="nudge">NUDGE</div>
+      <div class="rule"></div>
+      <div class="line">A gentle push for Wildwood College</div>
+    </div>
+  </div>
+  <div class="sprig"></div>
+</body>
+</html>

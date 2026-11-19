@@ -153,6 +153,28 @@ When `hash-tokens --remote` reports 0 remaining, the legacy fallback in `src/db/
 
 Pushpay is replacing Process Queues with Workflows. Once the church migrates, the queue endpoints stop working: the job will fail loudly (owner alert, failed `job_runs` row) instead of going quiet. The fix is a new `DataSource` beside `src/chms/pushpay.ts` using the Workflows endpoints (not public as of October 2026), and probably a fresh Master Admin approval for the new scopes. Nothing outside `src/chms/` should need to change.
 
+## Brand
+
+Holy Nudge wears the Wildwood College brand (from the ministry's Branding 2026 guide).
+
+- **Colours.** The two brand primaries, Navy `#29303E` and Dark Sage `#68866F`, plus white. Everything else is a tint or shade of those, defined once as CSS custom properties at the top of `public/styles.css` (light, and dark under `prefers-color-scheme`). Raw sage is only about 4:1 against white, so it is used for outlines, rings, step circles, glyphs and the done mark, never for small text: primary buttons are navy with white text (light) and a light sage tint with navy text (dark). One muted clay (`#98522A` light, `#E6AD7E` dark) is the only attention colour: the "N days overdue" line, its card stripe, and real error messages. Every text/background pair passes WCAG AA (4.5:1 for text, 3:1 for outlines and marks) in both modes; the lowest are the clay on the sage notice panel (4.72:1, light) and chip labels (5.58:1 light, 5.98:1 dark). Recheck any new pair before using it. The OAuth pages' single inline `<style>` uses the same colours; if you change it, update `OAUTH_PAGE_STYLE_HASH` in `src/chms/oauth.ts` (`test/headers.test.ts` recomputes it).
+- **Type.** The guide uses Gotham Black for headings and Gotham Book for text. Gotham is a commercial font and this repo and site are public, so it is not used anywhere here. **Montserrat** (SIL Open Font License 1.1, the closest free geometric match) stands in: one variable woff2, Latin subset, weights 100 to 900, `public/fonts/montserrat-latin-wght.woff2` (38 KB), from npm `@fontsource-variable/montserrat` 5.3.0 (Fontsource's build of the Google Fonts release, v31). Licence text: `public/fonts/OFL.txt`. Self-hosted because the CSP allows no external hosts; `font-display: swap` with a system fallback stack.
+- **Holy Nudge wordmark.** Not an image: the app icon plus live text ("HOLY" heavy over "NUDGE" light, echoing the WILDWOOD / COLLEGE lockup), coloured by the stylesheet tokens, built by `wordmark()` in `public/app.js`.
+- **App icon.** The smiling bell with a halo, on navy. Source: `public/icon.svg` (full bleed) and `public/favicon.svg` (rounded). The PNGs (`favicon-32`, `icon-192`, `icon-512`, `icon-maskable-512` with the artwork at 80% on a navy bleed, `apple-touch-icon` 180 opaque) are generated from them.
+- **Link previews.** `public/og.png` (1200x630) is drawn in `scripts/brand/og.html` and rendered with headless Chrome. The Open Graph / Twitter tags in `public/index.html` are generic on purpose and are served unchanged on `/l/<token>`, so they must never contain a token, a name or a count.
+- **Wildwood College logo.** The official secondary lockup (sprig + WILDWOOD COLLEGE), `SECONDARY LOGO/WC_SECONDARY_navy_2.png` and `WC_SECONDARY_white_2.png` from the Branding 2026 folder, resized and compressed only: `public/brand/wildwood-college-navy.png` (light) and `-white.png` (dark), swapped by the stylesheet. It sits small at the foot of each screen. Do not recolour, crop or redraw it.
+- **Sprig.** `public/sprig.svg` is a simple leaf sprig drawn for the empty states (a CSS mask, coloured sage). It is not cut from the Wildwood logo.
+
+Regenerate the PNGs after editing a source (uses the `sharp` that wrangler already installs; `--og` needs Google Chrome):
+
+```sh
+node scripts/gen-brand-assets.mjs --og
+# also refresh the Wildwood College logos from the official folder:
+node scripts/gen-brand-assets.mjs --wildwood "/path/to/Branding 2026"
+```
+
+Bump `CACHE` in `public/sw.js` whenever a cached shell asset changes.
+
 ## Not yet verified
 
 - Migration 0003, the security headers and the CSP were checked locally (wrangler pages dev, curl, and the desktop app's browser pane, which cannot register service workers at all). Not yet checked on the deployed site or on an iPhone Home Screen app: service worker registration, the manifest and notifications under the new CSP, and an installed app switching to a self-rotated link.

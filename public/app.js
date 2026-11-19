@@ -547,19 +547,30 @@
 
   /* ---------------------------------------------------------------- simple message screens */
 
-  /* The wordmark comes as two fixed-colour files chosen by the page. A single SVG with its own
-     prefers-color-scheme rule is unreliable inside <img> on iOS (it flips between light and dark). */
-  function logoPicture(cls, w, hgt) {
+  /* The wordmark is the app icon plus live text, coloured by the stylesheet's tokens, so light and dark
+     follow the page itself (an SVG with its own prefers-color-scheme rule flips unreliably on iOS). */
+  function wordmark(small) {
     return h(
-      'picture',
-      {},
-      h('source', { srcset: '/logo-dark.svg', media: '(prefers-color-scheme: dark)' }),
-      h('img', { class: cls || null, src: '/logo.svg', alt: 'Holy Nudge', width: w, height: hgt })
+      'div',
+      { class: 'wordmark' + (small ? ' small' : ''), role: 'img', 'aria-label': 'Holy Nudge' },
+      h('img', { src: '/icon.svg', alt: '', width: '48', height: '48' }),
+      h('span', { class: 'wm-text', 'aria-hidden': 'true' }, h('span', { class: 'wm-holy' }, 'Holy'), h('span', { class: 'wm-nudge' }, 'Nudge'))
     );
   }
 
   function markImg() {
-    return logoPicture('logo', '200', '48');
+    return wordmark(false);
+  }
+
+  /* Wildwood College's logo, small, at the foot of a screen. Two fixed-colour images; the stylesheet's own
+     media query shows the one that suits the colour scheme (a <picture> or self-theming SVG misbehaved on iOS). */
+  function wildwoodLogo() {
+    return h(
+      'div',
+      { class: 'ww' },
+      h('img', { class: 'ww-light', src: '/brand/wildwood-college-navy.png', alt: 'Wildwood College', width: '450', height: '140', loading: 'lazy', decoding: 'async' }),
+      h('img', { class: 'ww-dark', src: '/brand/wildwood-college-white.png', alt: 'Wildwood College', width: '450', height: '140', loading: 'lazy', decoding: 'async' })
+    );
   }
 
   function loadingScreen() {
@@ -573,7 +584,8 @@
       markImg(),
       h('h1', {}, 'Hi there, welcome to Holy Nudge'),
       h('p', { class: 'lead' }, 'This app opens from your own personal link. Please find the email we sent you and tap the link inside.'),
-      h('p', { class: 'muted small' }, 'Can’t find it? Just ask Cameron and he’ll send it again.')
+      h('p', { class: 'muted small' }, 'Can’t find it? Just ask Cameron and he’ll send it again.'),
+      wildwoodLogo()
     );
   }
 
@@ -583,7 +595,8 @@
       { class: 'screen center' },
       markImg(),
       h('h1', {}, 'This link isn’t working any more'),
-      h('p', { class: 'lead' }, 'This link is not valid any more. Please ask Cameron for a new one and we’ll get you sorted.')
+      h('p', { class: 'lead' }, 'This link is not valid any more. Please ask Cameron for a new one and we’ll get you sorted.'),
+      wildwoodLogo()
     );
   }
 
@@ -595,7 +608,8 @@
         markImg(),
         h('h1', {}, 'Let’s take a little breather'),
         h('p', { class: 'lead' }, 'Your list has been refreshed a lot in the last few minutes. Give it a few minutes and try again.'),
-        h('button', { class: 'btn primary', type: 'button', onclick: function () { load(); } }, 'Try again')
+        h('button', { class: 'btn primary', type: 'button', onclick: function () { load(); } }, 'Try again'),
+        wildwoodLogo()
       );
     }
     return h(
@@ -604,7 +618,8 @@
       markImg(),
       h('h1', {}, 'Hmm, we couldn’t load your list'),
       h('p', { class: 'lead' }, 'Check your connection and try again. It’s not you, it’s us.'),
-      h('button', { class: 'btn primary', type: 'button', onclick: function () { load(); } }, 'Try again')
+      h('button', { class: 'btn primary', type: 'button', onclick: function () { load(); } }, 'Try again'),
+      wildwoodLogo()
     );
   }
 
@@ -723,7 +738,8 @@
       markImg(),
       h('div', {}, h('h1', {}, title), env.ios && !env.standalone ? h('p', { class: 'lead gap-top' }, 'Just a minute of setup and then you’re done.') : null),
       body,
-      skipButton()
+      skipButton(),
+      wildwoodLogo()
     );
   }
 
@@ -826,7 +842,8 @@
       h('div', {}, h('h1', {}, 'You’re all set'), h('p', { class: 'lead gap-top' }, 'Nudges are on. Want to see what one looks like?')),
       test,
       statusEl,
-      h('button', { class: 'btn', type: 'button', onclick: function () { S.view = 'main'; render(); } }, 'Show my list')
+      h('button', { class: 'btn', type: 'button', onclick: function () { S.view = 'main'; render(); } }, 'Show my list'),
+      wildwoodLogo()
     );
   }
 
@@ -940,8 +957,8 @@
     );
   }
 
-  function emptyState(big, title, text) {
-    return h('div', { class: 'panel empty' }, h('div', { class: 'big-emoji', 'aria-hidden': 'true' }, big), h('h2', {}, title), h('p', { class: 'muted' }, text));
+  function emptyState(title, text) {
+    return h('div', { class: 'panel empty' }, h('div', { class: 'sprig', 'aria-hidden': 'true' }), h('h2', {}, title), h('p', { class: 'muted' }, text));
   }
 
   /* ---------------------------------------------------------------- main view */
@@ -961,7 +978,7 @@
       h(
         'div',
         { class: 'top' },
-        h('div', { class: 'brand' }, logoPicture('', '150', '36')),
+        h('div', { class: 'brand' }, wordmark(true)),
         h('button', { class: 'btn small-btn', type: 'button', onclick: function () { load(true); } }, 'Refresh')
       )
     );
@@ -999,7 +1016,8 @@
         { class: 'screen' },
         markImg(),
         h('div', {}, h('h1', {}, 'Let’s finish setting up'), h('p', { class: 'lead gap-top' }, 'Notifications aren’t on yet, so we can’t send your morning nudge. It only takes a minute.')),
-        h('button', { class: 'btn primary big', type: 'button', onclick: function () { S.skipped = false; session('del', SKIP_KEY); S.view = 'onboarding'; render(); } }, 'Finish setting up')
+        h('button', { class: 'btn primary big', type: 'button', onclick: function () { S.skipped = false; session('del', SKIP_KEY); S.view = 'onboarding'; render(); } }, 'Finish setting up'),
+        wildwoodLogo()
       );
     }
     var statusEl = h('p', { class: 'status-line', role: 'status' });
@@ -1013,7 +1031,8 @@
       h('p', { class: 'muted' }, 'Want to see what that looks like?'),
       testButton(statusEl, 'primary big'),
       statusEl,
-      h('p', { class: 'muted small center-text' }, 'Holy Nudge · a gentle push for Wildwood college ministry')
+      h('p', { class: 'muted small center-text' }, 'Holy Nudge · a gentle push for Wildwood College'),
+      wildwoodLogo()
     );
   }
 
@@ -1071,7 +1090,7 @@
     var head = h('div', { class: 'hello' }, h('h1', {}, greeting()), h('p', { class: 'lead' }, n === 0 ? 'Nothing is waiting on you today.' : n + ' ' + plural(n, 'student', 'students') + ' would love to hear from you.'));
     var banner = notificationsBanner();
     if (n === 0) {
-      return h('div', {}, head, banner, emptyState('🎉', 'You’re all caught up', 'Nobody is waiting on you right now. Thank you for caring for these students so well.'));
+      return h('div', {}, head, banner, emptyState('You’re all caught up', 'Nobody is waiting on you right now. Thank you for caring for these students so well.'));
     }
     return h('div', {}, head, banner, h('ul', { class: 'list' }, behind.map(function (i) { return personCard(i); })));
   }
@@ -1079,7 +1098,7 @@
   function unassignedView() {
     var items = S.me.admin.staleUnassigned;
     var head = h('div', { class: 'hello' }, h('h2', {}, 'Waiting for a leader'), h('p', { class: 'muted' }, 'These students have been in a queue for more than a day with nobody looking after them yet.'));
-    if (!items.length) return h('div', {}, head, emptyState('✨', 'Everyone has a leader', 'Nobody has been waiting for more than a day. Nice work.'));
+    if (!items.length) return h('div', {}, head, emptyState('Everyone has a leader', 'Nobody has been waiting for more than a day. Nice work.'));
     return h('div', {}, head, h('ul', { class: 'list' }, items.map(function (i) { return personCard(i, { waiting: true }); })));
   }
 
@@ -1090,7 +1109,7 @@
       return 0;
     });
     var head = h('div', { class: 'hello' }, h('h2', {}, 'Everyone who’s behind'), h('p', { class: 'muted' }, 'Grouped by leader, so you know who to cheer on.'));
-    if (!groups.length) return h('div', {}, head, emptyState('🎉', 'Nobody is behind', 'Every queue is on track. Lovely.'));
+    if (!groups.length) return h('div', {}, head, emptyState('Nobody is behind', 'Every queue is on track. Lovely.'));
     return h(
       'div',
       {},
@@ -1123,7 +1142,7 @@
       off.length ? h('p', { class: 'muted' }, staff ? 'A friendly reminder to these folks will help. If someone has lost their link, you can make them a new one below.' : 'A friendly reminder to these folks will help.') : null,
       off.length
         ? h('ul', { class: 'list' }, off.map(function (l) { return h('li', { class: 'card' }, h('div', { class: 'row' }, h('span', { class: 'name' }, l.name))); }))
-        : emptyState('🔔', 'Everyone is set up', 'All your leaders have notifications on.')
+        : emptyState('Everyone is set up', 'All your leaders have notifications on.')
     );
     return h('div', {}, offSection, staff ? leadersSection(a.leaders) : null);
   }
@@ -1403,7 +1422,7 @@
       var statusEl = h('p', { class: 'status-line small', role: 'status' });
       kids.push(testButton(statusEl, 'small-btn'), statusEl);
     }
-    kids.push(h('p', { class: 'muted small' }, 'Holy Nudge · a gentle push for Wildwood college ministry'));
+    kids.push(h('p', { class: 'muted small' }, 'Holy Nudge · a gentle push for Wildwood College'), wildwoodLogo());
     return h('div', { class: 'footer' }, kids);
   }
 

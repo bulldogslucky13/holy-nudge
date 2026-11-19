@@ -256,10 +256,11 @@ function escapeHtml(s: string): string {
 
 /** The OAuth pages' only style. Allowed by hash in their CSP (no 'unsafe-inline'). */
 export const OAUTH_PAGE_STYLE =
-  'body{font-family:system-ui,-apple-system,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.5;color:#222;background:#fffdf8}' +
-  '@media (prefers-color-scheme:dark){body{color:#eee;background:#1b1a17}}h1{font-size:1.4rem}';
+  'body{font-family:system-ui,-apple-system,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1rem;line-height:1.5;color:#29303e;background:#f3f6f4}' +
+  'h1{font-size:1.4rem;font-weight:800}h1::after{content:"";display:block;width:3rem;height:3px;margin-top:.6rem;background:#68866f}' +
+  '@media (prefers-color-scheme:dark){body{color:#f2f5f3;background:#1b2029}h1::after{background:#9db8a3}}';
 /** base64 SHA-256 of OAUTH_PAGE_STYLE (test/headers.test.ts recomputes it). */
-export const OAUTH_PAGE_STYLE_HASH = 'sha256-dk94l/gLNo01sOyyEbEDxRiHTkzxNDxbAf+FUZGU3Q8=';
+export const OAUTH_PAGE_STYLE_HASH = 'sha256-DbPW6+0DS0nw88g5Cu2Snj29LBZ1SLjA6c5RLGcIhpQ=';
 export const OAUTH_PAGE_CSP = CSP.replace("style-src 'self'", `style-src '${OAUTH_PAGE_STYLE_HASH}'`);
 
 /** A tiny self-contained page: no scripts, no external resources (so no Referer leaks the code). */
