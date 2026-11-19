@@ -1643,10 +1643,6 @@
         offBtn.addEventListener('click', function () { revokeLink(l, offBtn, statusEl); });
         btns.push(offBtn);
       }
-      // Changing or clearing an existing match is rare: a quiet text button.
-      if (l.hasLink && l.matched === true && !choosing) {
-        btns.push(h('button', { class: 'btn small-btn link', type: 'button', 'aria-label': 'Change the Lead match for ' + l.name, onclick: function () { openMatch(l); } }, 'Lead match'));
-      }
     }
     return h(
       'li',
@@ -1654,16 +1650,15 @@
       h(
         'div',
         { class: 'row person' },
-        h('span', { class: 'name' }, l.name, l.isYou ? h('span', { class: 'you' }, ' (you)') : null),
+        h('span', { class: 'name' }, l.name, l.isYou ? h('span', { class: 'you' }, ' (you)') : null, matchIcon(l)),
         h('span', { class: 'bell' + (l.notificationsOn ? '' : ' off'), role: 'img', 'aria-label': l.notificationsOn ? 'Notifications on' : 'Notifications off', title: l.notificationsOn ? 'Notifications on' : 'Notifications off' })
       ),
-      l.isStaff || !l.hasLink || unmatched
+      l.isStaff || !l.hasLink
         ? h(
             'div',
             { class: 'meta' },
             l.isStaff ? h('span', { class: 'chip staff' }, 'Staff') : null,
-            l.hasLink ? null : h('span', { class: 'chip' }, 'no working link'),
-            unmatched ? h('span', { class: 'chip unmatched' }, 'Not matched to Lead') : null
+            l.hasLink ? null : h('span', { class: 'chip' }, 'no working link')
           )
         : null,
       h('p', { class: 'muted small' }, lastSeenWords(l.lastSeenAt)),
@@ -1672,6 +1667,21 @@
       btns.length ? h('div', { class: 'btns' }, btns) : h('p', { class: 'muted small' }, 'Only the owner can change this link.'),
       statusEl
     );
+  }
+
+  // A small status icon after the name: matched (check in a circle) or not (dashed circle, question mark).
+  // Staff who can manage the row get a button that opens the match chooser; everyone else sees the same look, not interactive.
+  function matchIcon(l) {
+    if (!l.hasLink || typeof l.matched !== 'boolean') return null;
+    var ok = l.matched === true;
+    var glyph = h('span', { class: 'match-glyph' });
+    var joiner = document.createTextNode('\u2060'); // keeps the icon on the same line as the last word
+    if (l.canManage) {
+      var label = ok ? 'Matched to Lead. Change' : 'Not matched to Lead. Match';
+      return [joiner, h('button', { class: 'match-icon' + (ok ? '' : ' none'), type: 'button', 'aria-label': label, title: label, onclick: function () { openMatch(l); } }, glyph)];
+    }
+    var plain = ok ? 'Matched to Lead' : 'Not matched to Lead';
+    return [joiner, h('span', { class: 'match-icon' + (ok ? '' : ' none'), role: 'img', 'aria-label': plain, title: plain }, glyph)];
   }
 
   function footer() {

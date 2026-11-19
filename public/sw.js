@@ -4,7 +4,7 @@
  * - Caches only the static shell. /api/ responses are never cached or touched.
  */
 
-const CACHE = 'holy-nudge-shell-v10';
+const CACHE = 'holy-nudge-shell-v11';
 const SHELL_ASSETS = [
   '/styles.css',
   '/app.js',
@@ -13,6 +13,8 @@ const SHELL_ASSETS = [
   '/sprig.svg',
   '/bell.svg',
   '/bell-off.svg',
+  '/match-ok.svg',
+  '/match-none.svg',
   '/brand/wildwood-college-navy.png',
   '/brand/wildwood-college-white.png',
   '/favicon.svg',
