@@ -3,6 +3,11 @@ import type { DataSourceKind, HolyNudgeConfig, Status } from './types';
 
 export class ConfigError extends Error {}
 
+/** The church's written process: the assigned person follows up within one week. */
+export const DEFAULT_FOLLOW_UP_DAYS = 7;
+/** The church's written process: coordinators send a first text (and assign the card) within 72 hours. */
+export const DEFAULT_FIRST_TEXT_HOURS = 72;
+
 /** ChMS web UI queue page, pattern taken from real queue URLs (2026-11-17). Assumes the API queue id equals the web step_id; confirm with live data. */
 export const DEFAULT_QUEUE_URL_TEMPLATE = '{chmsBaseUrl}/step_individuals.php?ax=my&step_id={queueId}';
 
@@ -75,6 +80,15 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     fail('morningHour must be an integer 0-23');
   }
 
+  const followUpDays = o.followUpDays ?? DEFAULT_FOLLOW_UP_DAYS;
+  if (typeof followUpDays !== 'number' || !Number.isInteger(followUpDays) || followUpDays < 1) {
+    fail('followUpDays must be a whole number of days, at least 1');
+  }
+  const firstTextHours = o.firstTextHours ?? DEFAULT_FIRST_TEXT_HOURS;
+  if (typeof firstTextHours !== 'number' || !Number.isInteger(firstTextHours) || firstTextHours < 1) {
+    fail('firstTextHours must be a whole number of hours, at least 1');
+  }
+
   if (o.dataSource !== 'fixture' && o.dataSource !== 'pushpay') fail('dataSource must be "fixture" or "pushpay"');
 
   if (typeof o.chmsBaseUrl !== 'string') fail('chmsBaseUrl must be a string');
@@ -105,6 +119,8 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     adminsByQueue,
     timeZone: o.timeZone,
     morningHour: hour,
+    followUpDays,
+    firstTextHours,
     dataSource: o.dataSource as DataSourceKind,
     chmsBaseUrl: o.chmsBaseUrl.replace(/\/+$/, ''),
     ...(queueUrlTemplate !== undefined ? { queueUrlTemplate } : {}),

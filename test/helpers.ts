@@ -31,6 +31,8 @@ export function config(over: Partial<HolyNudgeConfig> = {}): HolyNudgeConfig {
     adminsByQueue: {},
     timeZone: TZ,
     morningHour: 8,
+    followUpDays: 7,
+    firstTextHours: 72,
     dataSource: 'fixture',
     chmsBaseUrl: 'https://example.com',
     ...over,

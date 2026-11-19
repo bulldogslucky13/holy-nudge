@@ -45,6 +45,13 @@ export interface HolyNudgeConfig {
   timeZone: string;
   /** Local hour (0-23) at which the daily job runs. */
   morningHour: number;
+  /**
+   * Days an assigned Not Started student with no due date has before they count as overdue (the
+   * written process: the assigned person follows up within one week). Elapsed time from `created`.
+   */
+  followUpDays: number;
+  /** Hours an unassigned student may wait (for the coordinators' first text) before the summary nudges daily. */
+  firstTextHours: number;
   dataSource: DataSourceKind;
   /** Base URL for deep links into ChMS. */
   chmsBaseUrl: string;
