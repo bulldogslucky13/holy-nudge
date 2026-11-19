@@ -83,6 +83,28 @@ describe('migration 0004 (Lead match by hand)', () => {
   });
 });
 
+describe('D1 store: last successful daily run', () => {
+  it('is the start of the latest ok run; failed and unfinished runs never count; null before any', async () => {
+    const t = await createTestD1(...MIGRATIONS);
+    const store = createD1Store(t.db);
+    expect(await store.lastSuccessfulRunStart()).toBeNull();
+
+    const a = await store.startJobRun(new Date('2026-01-13T14:00:00Z'));
+    await store.finishJobRun(a, true, { pushesSent: 1 }, new Date('2026-01-13T14:00:05Z'));
+    const b = await store.startJobRun(new Date('2026-01-14T14:00:00Z'));
+    await store.finishJobRun(b, false, { stage: 'datasource' }, new Date('2026-01-14T14:00:05Z'));
+    await store.startJobRun(new Date('2026-01-15T14:00:00Z')); // still running (ok = 0)
+    // The START of the run, not its finish: entries created while it ran are new next time (a repeat, never a miss).
+    expect((await store.lastSuccessfulRunStart())?.toISOString()).toBe('2026-01-13T14:00:00.000Z');
+
+    const c = await store.startJobRun(new Date('2026-01-16T14:00:00Z'));
+    await store.finishJobRun(c, true, {}, new Date('2026-01-16T14:00:05Z'));
+    expect((await store.lastSuccessfulRunStart())?.toISOString()).toBe('2026-01-16T14:00:00.000Z');
+    // Nothing about any student is in job_runs: one timestamp per run and a counts-only summary.
+    expect(Object.keys(t.sqlite.prepare('SELECT * FROM job_runs LIMIT 1').get() as object).sort()).toEqual(['finished_at', 'id', 'ok', 'started_at', 'summary']);
+  });
+});
+
 describe('token hashing', () => {
   it('scripts (Node crypto) and the Workers runtime (WebCrypto) hash a token identically', async () => {
     // @ts-expect-error plain .mjs helper without types

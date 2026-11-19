@@ -84,6 +84,13 @@ export interface Store {
   markSubscriptionOk(endpoint: string, at: Date): Promise<void>;
   startJobRun(startedAt: Date): Promise<number>;
   finishJobRun(id: number, ok: boolean, summary: JobRunSummary, finishedAt: Date): Promise<void>;
+  /**
+   * `started_at` of the latest daily job run that finished successfully, or null if none has. The nudge
+   * rules count a student as new when they entered a queue after this instant. Only the daily job writes
+   * job_runs, so nothing else (GET /api/me, staff pages, test pushes) can move it. A run still in progress
+   * or one that failed is ok = 0 and never counts.
+   */
+  lastSuccessfulRunStart(): Promise<Date | null>;
 }
 
 /** 32 random bytes, base64url (43 chars). The personal-link secret; only its hash is stored. */
@@ -341,6 +348,16 @@ export function createD1Store(db: D1Database): Store {
         .prepare(`UPDATE job_runs SET finished_at = ?2, ok = ?3, summary = ?4 WHERE id = ?1`)
         .bind(id, finishedAt.toISOString(), ok ? 1 : 0, JSON.stringify(summary))
         .run();
+    },
+
+    async lastSuccessfulRunStart() {
+      // started_at is always toISOString() (fixed width, UTC), so text order is time order.
+      const r = await db
+        .prepare(`SELECT started_at FROM job_runs WHERE ok = 1 ORDER BY started_at DESC, id DESC LIMIT 1`)
+        .first<{ started_at: string }>();
+      if (!r) return null;
+      const t = new Date(r.started_at);
+      return Number.isNaN(t.getTime()) ? null : t;
     },
   };
 }

@@ -5,6 +5,7 @@ import type { PushSender, SendResult } from '../src/push/sender';
 
 export interface FakeRun {
   id: number;
+  startedAt: Date;
   ok: boolean | null;
   summary: JobRunSummary | null;
 }
@@ -131,15 +132,23 @@ export class FakeStore implements Store {
     this.subs = this.subs.filter((s) => !(s.endpoint === endpoint && (leaderId === undefined || s.leaderId === leaderId)));
   }
   async markSubscriptionOk() {}
-  async startJobRun() {
+  async startJobRun(startedAt: Date) {
     const id = this.runs.length + 1;
-    this.runs.push({ id, ok: null, summary: null });
+    this.runs.push({ id, startedAt, ok: null, summary: null });
     return id;
   }
   async finishJobRun(id: number, ok: boolean, summary: JobRunSummary) {
     const r = this.runs.find((x) => x.id === id)!;
     r.ok = ok;
     r.summary = summary;
+  }
+  async lastSuccessfulRunStart() {
+    const ok = this.runs.filter((r) => r.ok === true).map((r) => r.startedAt.getTime());
+    return ok.length ? new Date(Math.max(...ok)) : null;
+  }
+  /** Record a finished run, as a previous morning would have left it. */
+  addRun(startedAt: Date, ok: boolean) {
+    this.runs.push({ id: this.runs.length + 1, startedAt, ok, summary: {} });
   }
 }
 
