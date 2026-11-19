@@ -405,6 +405,40 @@ describe('daily job', () => {
       expect(w.sender.sent).toEqual([]);
     });
 
+    it('a push that reaches no device keeps that person\'s window open: the new student is still new at the next run', async () => {
+      const w = world([entry({ id: 'p1', status: 'NOT_STARTED', assignee: lee, created: ago(6) })]);
+      const leeEndpoint = (await w.store.listSubscriptions(w.ids.lee))[0]!.endpoint;
+      w.sender.failing = [leeEndpoint];
+      expect(await w.run()).toMatchObject({ pushesSent: 0, pushesFailed: 1, undelivered: 1, retryFrom: { [w.ids.lee]: LAST.toISOString() } });
+      // Still failing the next morning: the hold is carried forward from the same starting point.
+      const day2 = new Date(NOW.getTime() + 24 * H);
+      expect(await w.run(day2)).toMatchObject({ undelivered: 1, retryFrom: { [w.ids.lee]: LAST.toISOString() } });
+      // Delivery recovers: the day-one nudge goes out, and the hold is cleared so it is not repeated.
+      w.sender.failing = [];
+      const day3 = new Date(NOW.getTime() + 48 * H);
+      expect(await w.run(day3)).toMatchObject({ pushesSent: 1, undelivered: 0, retryFrom: {} });
+      expect(w.pushed()).toEqual(['lee']);
+      w.sender.sent.length = 0;
+      await w.run(new Date(NOW.getTime() + 72 * H));
+      expect(w.sender.sent).toEqual([]);
+    });
+
+    it('a hold is one person\'s: others are not nudged again, and a hold older than the follow-up week is dropped', async () => {
+      const kit = person('K1', 'Kit');
+      const w = world([
+        entry({ id: 'h1', status: 'NOT_STARTED', assignee: lee, created: ago(6) }),
+        entry({ id: 'h2', status: 'IN_PROCESS', assignee: kit, created: ago(6) }),
+      ]);
+      // Mara (not the assignee) had a hold from the last run; it does not make Lee's student new for her summary twice.
+      w.store.runs[0]!.summary = { retryFrom: { [w.ids.mara]: new Date(LAST.getTime() - 24 * H).toISOString(), [w.ids.lee]: new Date(NOW.getTime() - 9 * 24 * H).toISOString() } };
+      await w.run();
+      expect(w.pushed()).toEqual(['lee']);
+      w.sender.sent.length = 0;
+      // Lee's nine-day-old hold was ignored, so the next morning the student is no longer new.
+      await w.run(new Date(NOW.getTime() + 24 * H));
+      expect(w.sender.sent).toEqual([]);
+    });
+
     it('date-only created: nudged on the day (if already there) and the next morning, then quiet until overdue', async () => {
       // Recorded as "2026-01-14"; already in the queue for the Jan 14 run.
       const w = world([entry({ id: 'd1', status: 'NOT_STARTED', assignee: lee, created: '2026-01-14' })], new Date('2026-01-13T14:00:00Z'));

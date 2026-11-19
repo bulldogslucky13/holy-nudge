@@ -146,6 +146,11 @@ export class FakeStore implements Store {
     const ok = this.runs.filter((r) => r.ok === true).map((r) => r.startedAt.getTime());
     return ok.length ? new Date(Math.max(...ok)) : null;
   }
+  async lastRunRetryFrom() {
+    const ok = this.runs.filter((r) => r.ok === true).sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime() || b.id - a.id)[0];
+    const v = ok?.summary?.retryFrom;
+    return v && typeof v === 'object' ? { ...v } : {};
+  }
   /** Record a finished run, as a previous morning would have left it. */
   addRun(startedAt: Date, ok: boolean) {
     this.runs.push({ id: this.runs.length + 1, startedAt, ok, summary: {} });
@@ -155,9 +160,12 @@ export class FakeStore implements Store {
 /** Records every push; endpoints listed in `gone` answer 410. */
 export class FakeSender implements PushSender {
   sent: { endpoint: string; payload: PushPayload }[] = [];
+  /** Endpoints that answer a temporary failure (500) while listed here. */
+  failing: string[] = [];
   constructor(private gone: string[] = []) {}
   async send(sub: { endpoint: string }, payload: PushPayload): Promise<SendResult> {
     if (this.gone.includes(sub.endpoint)) return { ok: false, gone: true, status: 410 };
+    if (this.failing.includes(sub.endpoint)) return { ok: false, gone: false, status: 500 };
     this.sent.push({ endpoint: sub.endpoint, payload });
     return { ok: true, gone: false, status: 201 };
   }

@@ -35,7 +35,7 @@ export interface NewSubscription {
 }
 
 export interface JobRunSummary {
-  [key: string]: number | string | boolean | null;
+  [key: string]: number | string | boolean | null | Record<string, string>;
 }
 
 export interface Store {
@@ -91,6 +91,13 @@ export interface Store {
    * or one that failed is ok = 0 and never counts.
    */
   lastSuccessfulRunStart(): Promise<Date | null>;
+  /**
+   * `retryFrom` of the latest successful daily run's summary: leader row id -> ISO instant. A person is
+   * listed when their push was due that morning but reached none of their devices; the instant is the
+   * start of the window they were being told about, so the next run can look that far back for them.
+   * Leader row ids and timestamps of our own runs only: nothing about any student.
+   */
+  lastRunRetryFrom(): Promise<Record<string, string>>;
 }
 
 /** 32 random bytes, base64url (43 chars). The personal-link secret; only its hash is stored. */
@@ -104,6 +111,21 @@ export async function hashToken(token: string): Promise<string> {
   let hex = '';
   for (const b of d) hex += b.toString(16).padStart(2, '0');
   return hex;
+}
+
+/** Read `retryFrom` out of a stored run summary; anything malformed is ignored (an empty map). */
+export function parseRetryFrom(summary: string | null): Record<string, string> {
+  if (!summary) return {};
+  let v: unknown;
+  try {
+    v = (JSON.parse(summary) as { retryFrom?: unknown } | null)?.retryFrom;
+  } catch {
+    return {};
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, t] of Object.entries(v)) if (typeof t === 'string' && !Number.isNaN(Date.parse(t))) out[k] = t;
+  return out;
 }
 
 interface LeaderDbRow {
@@ -358,6 +380,13 @@ export function createD1Store(db: D1Database): Store {
       if (!r) return null;
       const t = new Date(r.started_at);
       return Number.isNaN(t.getTime()) ? null : t;
+    },
+
+    async lastRunRetryFrom() {
+      const r = await db
+        .prepare(`SELECT summary FROM job_runs WHERE ok = 1 ORDER BY started_at DESC, id DESC LIMIT 1`)
+        .first<{ summary: string | null }>();
+      return parseRetryFrom(r?.summary ?? null);
     },
   };
 }

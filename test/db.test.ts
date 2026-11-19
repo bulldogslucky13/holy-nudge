@@ -100,6 +100,11 @@ describe('D1 store: last successful daily run', () => {
     const c = await store.startJobRun(new Date('2026-01-16T14:00:00Z'));
     await store.finishJobRun(c, true, {}, new Date('2026-01-16T14:00:05Z'));
     expect((await store.lastSuccessfulRunStart())?.toISOString()).toBe('2026-01-16T14:00:00.000Z');
+    // Undelivered pushes carried to the next run: read from the latest ok run only; junk is ignored.
+    expect(await store.lastRunRetryFrom()).toEqual({});
+    const d = await store.startJobRun(new Date('2026-01-17T14:00:00Z'));
+    await store.finishJobRun(d, true, { retryFrom: { '7': '2026-01-16T14:00:00.000Z', '8': 'not a date' } }, new Date('2026-01-17T14:00:05Z'));
+    expect(await store.lastRunRetryFrom()).toEqual({ '7': '2026-01-16T14:00:00.000Z' });
     // Nothing about any student is in job_runs: one timestamp per run and a counts-only summary.
     expect(Object.keys(t.sqlite.prepare('SELECT * FROM job_runs LIMIT 1').get() as object).sort()).toEqual(['finished_at', 'id', 'ok', 'started_at', 'summary']);
   });

@@ -3,8 +3,9 @@
 import { ChmsNotConfiguredError } from '../chms/oauth';
 import { IncompleteDataError } from '../chms/pushpay';
 import { ReauthorizationRequired, TokenPersistError } from '../chms/tokens';
-import { computeNudges, isNewSinceLastRun, isOverdue, isPastFirstText, ownTriggered, summaryTriggered, type RunWindow } from '../core/behind';
+import { computeNudges, FIRST_RUN_LOOKBACK_MS, isNewSinceLastRun, isOverdue, isPastFirstText, ownTriggered, summaryTriggered, type RunWindow } from '../core/behind';
 import { isLive } from '../core/config';
+import { HOUR_MS } from '../core/time';
 import { errorClassName } from '../core/errors';
 import type { DataSource, HolyNudgeConfig } from '../core/types';
 import type { JobRunSummary, Store } from '../db';
@@ -85,6 +86,17 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     // "New" means entered a queue after the start of the last successful daily run (this run is still
     // ok = 0, so it is not that run). Only a timestamp of our own run: nothing about any student is kept.
     const window: RunWindow = { now, lastRunAt: await store.lastSuccessfulRunStart() };
+    // A push that was due at the last run but reached none of that person's devices must not use up their
+    // "new" window: for them alone, look back to where that window started. Carried in the run summary as
+    // leader row id -> instant (our own ids and run times, nothing about a student). A hold older than
+    // followUpDays is dropped: by then the overdue rule nudges anyway.
+    const heldFrom = await store.lastRunRetryFrom();
+    const retryFrom: Record<string, string> = {};
+    const windowFor = (rowId: number): RunWindow => {
+      const t = Date.parse(heldFrom[String(rowId)] ?? '');
+      if (Number.isNaN(t) || now.getTime() - t > config.followUpDays * 24 * HOUR_MS) return window;
+      return window.lastRunAt !== null && window.lastRunAt.getTime() <= t ? window : { now, lastRunAt: new Date(t) };
+    };
 
     const nudges = computeNudges(snapshot.queues, snapshot.entries, config, now);
     let delivery: DeliveryCounts = emptyCounts();
@@ -100,6 +112,8 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     let summaryTriggeredPeople = 0;
     /** People with something waiting but nothing new or overdue this morning: no push. */
     let skippedNothingNewOrOverdue = 0;
+    /** People whose push was due but reached none of their devices (temporary failure): retried next run. */
+    let undelivered = 0;
 
     // Until real data is connected, everything computed above is about made-up sample students. Only
     // staff (is_admin) may be nudged about it; a real volunteer whose row happens to map to a sample
@@ -108,24 +122,25 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
 
     // Their own students waiting, per leader row, and whether any of them is due a push this morning.
     const own = new Map<number, { count: number; fires: boolean }>();
+    type SummaryView = Parameters<typeof summaryTriggered>[0];
     for (const l of nudges.leaders) {
       const row = byChms.get(l.leader.id);
       if (!row || l.behind.length === 0) continue;
       if (!live && !row.isAdmin) continue;
-      own.set(row.id, { count: l.behind.length, fires: ownTriggered(l.behind, window, config) });
+      own.set(row.id, { count: l.behind.length, fires: ownTriggered(l.behind, windowFor(row.id), config) });
     }
 
     // Admin summaries: is_admin rows get the whole process; other queue admins get their queues.
-    const summaries = new Map<number, { counts: ReturnType<typeof adminCounts>; fires: boolean }>();
+    const summaries = new Map<number, { counts: ReturnType<typeof adminCounts>; view: SummaryView }>();
     const globalView = globalAdminView(snapshot, config, now);
     const globalCounts = adminCounts(globalView);
-    const global = { counts: globalCounts, fires: summaryTriggered(globalView, window, config) };
+    const global = { counts: globalCounts, view: globalView };
     for (const row of rows) if (row.isAdmin) summaries.set(row.id, global);
     for (const a of nudges.admins) {
       const row = byChms.get(a.adminId);
       if (!row || summaries.has(row.id)) continue;
       if (!live && !row.isAdmin) continue;
-      summaries.set(row.id, { counts: adminCounts(a), fires: summaryTriggered(a, window, config) });
+      summaries.set(row.id, { counts: adminCounts(a), view: a });
     }
 
     // One push per person per morning: their own count, their summary, or both in one. It goes out only
@@ -139,7 +154,7 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
       const waiting = counts?.waiting ?? 0; // a summary with nothing waiting is not worth a push
       if (mine === 0 && waiting === 0) continue;
       const ownFires = mine > 0 && mineOwn!.fires;
-      const summaryFires = waiting > 0 && summary!.fires;
+      const summaryFires = waiting > 0 && summaryTriggered(summary!.view, windowFor(row.id), config);
       if (ownFires) ownTriggeredPeople++;
       if (summaryFires) summaryTriggeredPeople++;
       if (!ownFires && !summaryFires) {
@@ -154,6 +169,12 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
             : adminPayload(waiting, counts!.leaders, counts!.unassigned);
       const r = await deliverToLeader(store, sender, row.id, payload, now);
       delivery = addCounts(delivery, r);
+      // Due, but every device failed for now (not gone): keep this person's window open for the next run.
+      if (r.sent === 0 && r.failed > 0) {
+        const from = windowFor(row.id).lastRunAt ?? new Date(now.getTime() - FIRST_RUN_LOOKBACK_MS);
+        retryFrom[String(row.id)] = from.toISOString();
+        undelivered++;
+      }
       if (r.sent === 0) continue;
       if (mine > 0) leadersNudged++;
       if (waiting > 0) adminsNudged++;
@@ -180,6 +201,8 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
       pushesSent: delivery.sent,
       pushesFailed: delivery.failed,
       subscriptionsRemoved: delivery.removed,
+      undelivered,
+      retryFrom,
     };
     await store.finishJobRun(runId, true, summary, new Date());
     return { ran: true, summary };
