@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { base64urlDecode, base64urlEncode } from '../src/push/base64url';
 import { encryptPushPayload, p256PointToJwk } from '../src/push/encrypt';
-import { adminPayload, alertPayload, leaderPayload, testPayload } from '../src/push/payload';
+import { adminPayload, alertPayload, combinedPayload, leaderPayload, testPayload } from '../src/push/payload';
 import { createWebPushSender } from '../src/push/sender';
 import { deliverToLeader } from '../src/push/deliver';
 import { importVapidSigningKey, vapidAuthorization } from '../src/push/vapid';
@@ -90,8 +90,13 @@ describe('payload copy', () => {
     expect(alertPayload('datasource').title).toBe('Could not read ChMS this morning');
   });
 
+  it('combines own students and a summary into one push that opens their own list', () => {
+    expect(combinedPayload(2, 12, 3, 'yours')).toEqual({ title: '2 students are waiting on you', body: '12 waiting across your queues, 3 unassigned', kind: 'leader', count: 2 });
+    expect(combinedPayload(1, 9, 0, 'all')).toEqual({ title: '1 student is waiting on you', body: '9 waiting across all queues', kind: 'leader', count: 1 });
+  });
+
   it('never repeats the app name, which the phone already shows', () => {
-    const all = [leaderPayload(2), adminPayload(3, 1, 1), testPayload(), ...(['reauth', 'not_configured', 'incomplete', 'datasource', 'job'] as const).map(alertPayload)];
+    const all = [leaderPayload(2), adminPayload(3, 1, 1), combinedPayload(2, 5, 1, 'all'), combinedPayload(1, 3, 0, 'yours'), testPayload(), ...(['reauth', 'not_configured', 'incomplete', 'datasource', 'job'] as const).map(alertPayload)];
     for (const p of all) expect(`${p.title} ${p.body}`).not.toMatch(/holy nudge/i);
   });
 });

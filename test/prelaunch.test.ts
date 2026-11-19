@@ -164,8 +164,10 @@ describe('daily job while not live', () => {
     for (const id of mapped.filter((i) => i !== staffMappedId)) expect(toLeader(id)).toEqual([]);
 
     expect(toLeader(staffPlain).map((s) => s.payload.kind)).toEqual(['admin']);
-    // The mapped staff row still gets its summary (and its own leader nudge if it has students behind).
-    expect(toLeader(staffMappedId).map((s) => s.payload.kind)).toContain('admin');
+    // The mapped staff row gets one push: its summary, combined with its own count if it has students behind.
+    const mappedPushes = toLeader(staffMappedId);
+    expect(mappedPushes).toHaveLength(1);
+    expect(mappedPushes[0]!.payload.body).toMatch(/^\d+ waiting across all queues|^Across /);
     // Everything sent went to staff, and only counts.
     const staffIds = new Set([staffPlain, staffMappedId]);
     for (const s of sender.sent) {
