@@ -30,6 +30,8 @@ export interface LeaderAdminJson {
   hasLink: boolean;
   lastSeenAt: string | null;
   notificationsOn: boolean;
+  /** Staff (is_admin, which includes the owner): sees every queue and manages links. */
+  isStaff: boolean;
   /** False for the owner's row unless the viewer is the owner (only the owner rotates or turns off an owner link). */
   canManage: boolean;
   isYou: boolean;
@@ -75,6 +77,7 @@ export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow): LeaderAdminJso
     hasLink: l.hasLink,
     lastSeenAt: l.lastSeenAt,
     notificationsOn: l.subscriptionCount > 0,
+    isStaff: l.isAdmin,
     canManage: canManageLink(viewer, l),
     isYou: l.id === viewer.id,
   };

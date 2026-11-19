@@ -88,9 +88,9 @@ describe('GET /api/me response', () => {
     const me = buildMe({ config: cfg, snapshot: snap, leader: owner, leaders, now: NOW });
     expect(me.admin!.byLeader.length).toBeGreaterThan(1);
     expect(me.admin!.leaders).toEqual([
-      { id: 5, name: 'Ava', hasLink: false, lastSeenAt: null, notificationsOn: false, canManage: true, isYou: false },
-      { id: 9, name: 'Owner', hasLink: true, lastSeenAt: '2026-01-15T13:00:00.000Z', notificationsOn: true, canManage: true, isYou: true },
-      { id: 4, name: 'Staffer', hasLink: true, lastSeenAt: null, notificationsOn: false, canManage: true, isYou: false },
+      { id: 5, name: 'Ava', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false },
+      { id: 9, name: 'Owner', hasLink: true, lastSeenAt: '2026-01-15T13:00:00.000Z', notificationsOn: true, isStaff: true, canManage: true, isYou: true },
+      { id: 4, name: 'Staffer', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: true, canManage: true, isYou: false },
     ]);
     // A non-owner staff member cannot manage the owner's row.
     const asStaff = buildMe({ config: cfg, snapshot: snap, leader: staff, leaders, now: NOW });
