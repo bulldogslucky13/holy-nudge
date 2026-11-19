@@ -166,8 +166,8 @@
     "id": "E5012",
     "queueId": "4",
     "status": "NOT_STARTED",
-    "dueOffsetDays": 0,
-    "createdOffsetHours": -60,
+    "dueOffsetDays": null,
+    "createdOffsetHours": -200,
     "completedOffsetHours": null,
     "assigneeId": "L102",
     "individual": {
@@ -344,8 +344,8 @@
     "id": "E5024",
     "queueId": "6",
     "status": "NOT_STARTED",
-    "dueOffsetDays": 1,
-    "createdOffsetHours": -40,
+    "dueOffsetDays": null,
+    "createdOffsetHours": -72,
     "completedOffsetHours": null,
     "assigneeId": "L107",
     "individual": {
@@ -508,7 +508,7 @@
     "queueId": "9",
     "status": "NOT_STARTED",
     "dueOffsetDays": 3,
-    "createdOffsetHours": -20,
+    "createdOffsetHours": -3,
     "completedOffsetHours": null,
     "assigneeId": "L106",
     "individual": {
@@ -523,7 +523,7 @@
     "queueId": "9",
     "status": "IN_PROCESS",
     "dueOffsetDays": -2,
-    "createdOffsetHours": -72,
+    "createdOffsetHours": -96,
     "completedOffsetHours": null,
     "assigneeId": null,
     "individual": {
