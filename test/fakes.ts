@@ -60,9 +60,9 @@ export class FakeStore implements Store {
     l.revokedAt = null;
     return true;
   }
-  async createLeader(name: string, tokenHash: string) {
+  async createLeader(name: string, tokenHash: string, isAdmin = false) {
     if (this.leaders.some((l) => l.name.toLowerCase() === name.toLowerCase())) return null;
-    return this.addLeader({ name, linkToken: `hash:${tokenHash}` });
+    return this.addLeader({ name, linkToken: `hash:${tokenHash}`, isAdmin });
   }
   async revokeLink(leaderId: number, at: Date) {
     const l = this.leaders.find((x) => x.id === leaderId);

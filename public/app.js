@@ -224,18 +224,23 @@
   }
 
   var hoursAgo = function (h) { return new Date(Date.now() - h * 3600000).toISOString(); };
+  // All made up. A mix on purpose: staff and servant leaders, notifications on and off, one with no working link.
   var mockLeaders = [
-    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, canManage: true, isYou: false },
-    { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, canManage: true, isYou: false },
-    { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, canManage: true, isYou: true },
-    { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, canManage: true, isYou: false },
-    { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, canManage: false, isYou: false },
+    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false },
+    { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false },
+    { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, isStaff: true, canManage: true, isYou: true },
+    { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, isStaff: false, canManage: true, isYou: false },
+    { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, isStaff: true, canManage: false, isYou: false },
+    { id: 16, name: 'Avery Placeholder', hasLink: true, lastSeenAt: hoursAgo(50), notificationsOn: false, isStaff: true, canManage: true, isYou: false },
+    { id: 17, name: 'Jordan Notreal', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false },
+    { id: 18, name: 'Taylor Testwell', hasLink: true, lastSeenAt: hoursAgo(5), notificationsOn: true, isStaff: false, canManage: true, isYou: false },
   ];
 
   var mockAdded = []; // people "added" in a mock session (so a repeat name answers name_taken)
 
   function mockMe() {
-    var admin = mock === 'admin' || mock === 'admin-sample';
+    var manager = mock === 'manager'; // a queue-manager admin who is not staff: summary only, no link controls
+    var admin = mock === 'admin' || mock === 'admin-sample' || manager;
     var items = [
       mockItem('e1', 'q3', 'Outreach Team', 'NOT_STARTED', '2026-11-10', 7, 'Pat Example', '405-555-0101'),
       mockItem('e2', 'q4', 'Bible Study Hosts & Events Team', 'IN_PROCESS', '2026-11-14', 3, 'Rowan Placeholder', '405-555-0102'),
@@ -262,8 +267,8 @@
           { leader: { name: 'Devon Mockford' }, notificationsOn: false, items: [mockItem('e20', 'q5', 'Service Team', 'WAITING', '2026-11-12', 5, 'Ash Fictional', '405-555-0120')] },
         ],
         leadersWithoutNotifications: [{ name: 'Devon Mockford' }, { name: 'Lee Madeup' }],
-        leaders: mockLeaders,
       };
+      if (!manager) me.admin.leaders = mockLeaders;
     }
     return me;
   }
@@ -288,7 +293,9 @@
           var nm = String((body && body.name) || '').replace(/\s+/g, ' ').trim();
           var taken = mockLeaders.concat(mockAdded).some(function (l) { return l.name.toLowerCase() === nm.toLowerCase(); });
           if (taken) return reject(new ApiError(409, 'name_taken'));
-          var added = { id: 100 + mockAdded.length, name: nm };
+          var role = body && body.role === 'staff' ? 'staff' : 'leader';
+          if (body && body.role !== undefined && body.role !== 'staff' && body.role !== 'leader') return reject(new ApiError(400, 'invalid_role'));
+          var added = { id: 100 + mockAdded.length, name: nm, role: role };
           mockAdded.push(added);
           var link = 'mock' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + 'link';
           return resolve({ url: location.origin + '/l/' + link, leader: added });
@@ -462,6 +469,7 @@
     errorCode: null,
     minted: {}, // leader id -> URL just minted (memory only, shown once, gone on reload)
     justAdded: null, // id of the leader staff just added: their new-link panel shows under the add form
+    addRole: 'leader', // leader | staff: the role chosen in the add form
     addName: '', // what is typed in the add form (survives a re-render)
     addOpen: false, // add form is tucked behind an "Add a leader" button until tapped
   };
@@ -1042,7 +1050,7 @@
       { id: 'mine', label: 'Mine', n: S.me.behind.length },
       { id: 'unassigned', label: 'Unassigned', n: a.staleUnassigned.length },
       { id: 'behind', label: 'Behind', n: null },
-      { id: 'team', label: 'Team', n: a.leadersWithoutNotifications.length },
+      { id: 'team', label: 'Team', n: teamBadge() },
     ];
     return h(
       'div',
@@ -1130,29 +1138,50 @@
     );
   }
 
+  /* People who have a working link but have not turned on notifications: the ones worth a friendly reminder. */
+  function teamNotificationsOff(leaders) {
+    return leaders.filter(function (l) { return l.hasLink && !l.notificationsOn; });
+  }
+
+  /* The Team tab's count: staff count people with a link and no notifications; queue-manager admins (no
+     leader list) keep the server's list of leaders in their queues without notifications. */
+  function teamBadge() {
+    var a = S.me.admin;
+    return Array.isArray(a.leaders) ? teamNotificationsOff(a.leaders).length : a.leadersWithoutNotifications.length;
+  }
+
+  function teamSummary(leaders) {
+    var linked = leaders.filter(function (l) { return l.hasLink; }).length;
+    var off = teamNotificationsOff(leaders).length;
+    if (!linked) return 'Nobody has a link yet. Add someone, or make a link on their row.';
+    if (!off) return 'Everyone with a link has notifications on.';
+    return off + ' of ' + linked + ' ' + plural(linked, 'person', 'people') + ' with a link ' + plural(off, 'hasn’t', 'haven’t') + ' turned on notifications yet.';
+  }
+
   function teamView() {
     var a = S.me.admin;
-    var off = a.leadersWithoutNotifications;
-    var staff = Array.isArray(a.leaders); // link management is for staff only
+    if (Array.isArray(a.leaders)) return leadersSection(a.leaders); // link management is for staff only
 
-    var offSection = h(
+    // Queue-manager admins (not staff): a simple list, no link controls.
+    var off = a.leadersWithoutNotifications;
+    return h(
       'section',
       { class: 'section' },
       h('h2', {}, 'Haven’t turned on notifications'),
-      off.length ? h('p', { class: 'muted' }, staff ? 'A friendly reminder to these folks will help. If someone has lost their link, you can make them a new one below.' : 'A friendly reminder to these folks will help.') : null,
+      off.length ? h('p', { class: 'muted' }, 'A friendly reminder to these folks will help.') : null,
       off.length
         ? h('ul', { class: 'list' }, off.map(function (l) { return h('li', { class: 'card' }, h('div', { class: 'row' }, h('span', { class: 'name' }, l.name))); }))
         : emptyState('Everyone is set up', 'All your leaders have notifications on.')
     );
-    return h('div', {}, offSection, staff ? leadersSection(a.leaders) : null);
   }
 
   function leadersSection(leaders) {
     return h(
       'section',
       { class: 'section' },
-      h('h2', {}, 'Leader links'),
-      h('p', { class: 'muted' }, 'Each link is personal and works like a password. A new link is shown just once, so send it straight away. Making a new one turns the old one off.'),
+      h('h2', {}, 'Team'),
+      h('p', { class: 'muted', id: 'team-summary' }, teamSummary(leaders)),
+      h('p', { class: 'muted small' }, 'Each link is personal and works like a password. A new link is shown just once, so send it straight away. Making a new one turns the old one off.'),
       addLeaderPanel(leaders),
       leaders.length
         ? h('ul', { class: 'list' }, leaders.map(leaderRow))
@@ -1166,6 +1195,7 @@
     if (code === 'name_required') return 'Type their name first.';
     if (code === 'name_too_short') return 'That’s a bit short. Please use at least 2 characters.';
     if (code === 'name_too_long') return 'That’s a long name. Please keep it under 60 characters.';
+    if (code === 'invalid_role') return 'Please choose Servant leader or Staff.';
     if (code === 'invalid_name') return 'That name has a character we can’t use. Please type it again.';
     if (e instanceof ApiError && (e.status === 429 || e.status === 403)) return linkErrorWords(e);
     return 'That didn’t go through. Please check your connection and try again.';
@@ -1195,9 +1225,23 @@
       statusEl.textContent = msg;
     }
 
+    function roleOption(value, title, help) {
+      var radio = h('input', { type: 'radio', name: 'leader-role', value: value, checked: S.addRole === value });
+      radio.addEventListener('change', function () { if (radio.checked) S.addRole = value; });
+      return h('label', { class: 'role-option' }, radio, h('span', { class: 'role-title' }, title), h('span', { class: 'role-help' }, help));
+    }
+    var roles = h(
+      'fieldset',
+      { class: 'role-set' },
+      h('legend', { class: 'field-label' }, 'Their role'),
+      roleOption('leader', 'Servant leader', 'Sees only the students assigned to them.'),
+      roleOption('staff', 'Staff', 'Sees every queue and can add people and manage links.')
+    );
+
     var form = h(
       'form',
       { class: 'add-form', novalidate: true },
+      roles,
       h('label', { class: 'field-label', for: 'add-leader-name' }, 'Their name'),
       h('div', { class: 'add-row' }, input, btn),
       statusEl
@@ -1209,19 +1253,20 @@
       if (!name) return fail('Type their name first.');
       if (len < 2) return fail('That’s a bit short. Please use at least 2 characters.');
       if (len > 60) return fail('That’s a long name. Please keep it under 60 characters.');
+      var role = S.addRole === 'staff' ? 'staff' : 'leader';
+      if (role === 'staff' && !window.confirm(name + ' will be able to see every student and manage everyone’s links. Add as staff?')) return;
       btn.disabled = true;
       statusEl.className = 'status-line small';
       statusEl.textContent = 'Adding ' + name + '…';
-      api('/api/leader-add', { method: 'POST', body: { name: name } })
+      api('/api/leader-add', { method: 'POST', body: { name: name, role: role } })
         .then(function (res) {
-          var row = { id: res.leader.id, name: res.leader.name, hasLink: true, lastSeenAt: null, notificationsOn: false, canManage: true, isYou: false };
+          var row = { id: res.leader.id, name: res.leader.name, hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: res.leader.role === 'staff', canManage: true, isYou: false };
           S.me.admin.leaders.push(row);
           S.me.admin.leaders.sort(function (a, b) { return a.name.localeCompare(b.name); });
-          S.me.admin.leadersWithoutNotifications.push({ name: row.name });
-          S.me.admin.leadersWithoutNotifications.sort(function (a, b) { return a.name.localeCompare(b.name); });
           S.minted[row.id] = res.url;
           S.justAdded = row.id;
           S.addName = '';
+          S.addRole = 'leader';
           S.addOpen = false;
           renderInPlace();
         })
@@ -1252,6 +1297,7 @@
     var cancelBtn = h('button', { class: 'btn link', type: 'button', onclick: function () {
       S.addOpen = false;
       S.addName = '';
+      S.addRole = 'leader';
       renderInPlace();
     } }, 'Cancel');
     form.querySelector('.add-row').appendChild(cancelBtn);
@@ -1402,13 +1448,15 @@
     return h(
       'li',
       { class: 'card' },
-      h('div', { class: 'row' }, h('span', { class: 'name' }, l.name, l.isYou ? h('span', { class: 'muted' }, ' (you)') : null)),
       h(
         'div',
-        { class: 'meta' },
-        h('span', { class: 'chip' + (l.notificationsOn ? ' good' : '') }, l.notificationsOn ? 'notifications on' : 'notifications off'),
-        l.hasLink ? null : h('span', { class: 'chip' }, 'no working link')
+        { class: 'row person' },
+        h('span', { class: 'name' }, l.name, l.isYou ? h('span', { class: 'you' }, ' (you)') : null),
+        h('span', { class: 'bell' + (l.notificationsOn ? '' : ' off'), role: 'img', 'aria-label': l.notificationsOn ? 'Notifications on' : 'Notifications off', title: l.notificationsOn ? 'Notifications on' : 'Notifications off' })
       ),
+      l.isStaff || !l.hasLink
+        ? h('div', { class: 'meta' }, l.isStaff ? h('span', { class: 'chip staff' }, 'Staff') : null, l.hasLink ? null : h('span', { class: 'chip' }, 'no working link'))
+        : null,
       h('p', { class: 'muted small' }, lastSeenWords(l.lastSeenAt)),
       minted ? mintedPanel(l, minted) : null,
       btns.length ? h('div', { class: 'btns' }, btns) : h('p', { class: 'muted small' }, 'Only the owner can change this link.'),

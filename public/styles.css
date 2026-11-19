@@ -419,6 +419,28 @@ details.group > .list { padding: 4px 4px 8px; }
   -webkit-user-select: all;
 }
 
+/* ---------- team rows: notification bell and role ---------- */
+
+/* Status is the shape, not just the colour: a plain bell is on, a bell with a strike through it is off.
+   Drawn as masks (bell.svg, bell-off.svg) so the colour comes from the tokens, like the sprig. */
+.bell {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  background: var(--accent);
+  -webkit-mask: url("/bell.svg") center / contain no-repeat;
+  mask: url("/bell.svg") center / contain no-repeat;
+}
+.bell.off {
+  background: var(--warn);
+  -webkit-mask-image: url("/bell-off.svg");
+  mask-image: url("/bell-off.svg");
+}
+.row .you { color: var(--muted); font-weight: 500; }
+.card > .status-line:empty { display: none; }
+.row.person { flex-wrap: nowrap; align-items: flex-start; }
+.chip.staff { background: var(--primary); color: var(--on-primary); }
+
 /* ---------- add a leader (staff) ---------- */
 
 .add-closed { display: grid; gap: 12px; justify-items: start; margin: 4px 0 12px; }
@@ -443,6 +465,28 @@ details.group > .list { padding: 4px 4px 8px; }
   font: inherit;
 }
 .add-row .btn { flex: 0 0 auto; }
+
+/* two radio cards: who are they adding? */
+.role-set { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.role-set legend { padding: 0; margin-bottom: 8px; }
+.role-option {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  column-gap: 12px;
+  align-items: start;
+  min-height: 56px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1.5px solid var(--line);
+  background: var(--card);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.role-option input { width: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
+.role-option .role-title { font-weight: 700; }
+.role-option .role-help { grid-column: 2; font-size: 0.875rem; color: var(--muted); }
+.role-option:has(input:checked) { border-color: var(--line-strong); background: var(--accent-soft); }
+.role-option:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
 
 /* ---------- small layout helpers (instead of style attributes, so the CSP needs no 'unsafe-inline') ---------- */
 

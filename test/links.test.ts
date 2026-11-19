@@ -179,7 +179,7 @@ describe('POST /api/leader-link and /api/leader-revoke', () => {
 });
 
 describe('POST /api/leader-add', () => {
-  type AddBody = { url: string; leader: { id: number; name: string } };
+  type AddBody = { url: string; leader: { id: number; name: string; role: string } };
   const add = (token: string | null, body?: unknown) => call(leaderAdd, '/api/leader-add', token, body);
   const rowByName = (name: string) =>
     t.sqlite.prepare('SELECT id, chms_individual_id, name, token, token_hash, is_admin, is_owner, revoked_at FROM leaders WHERE name = ?').get(name) as Record<string, unknown>;
@@ -275,6 +275,58 @@ describe('POST /api/leader-add', () => {
     expect((await call(leaderLink, '/api/leader-link', fresh, { leaderId: id.leader })).status).toBe(403);
   });
 
+  it('role defaults to a servant leader and is reported back; isStaff shows in the staff list', async () => {
+    for (const body of [{ name: 'Default Role' }, { name: 'Explicit Role', role: 'leader' }]) {
+      const res = await add(tok.staff, body);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as AddBody).leader.role).toBe('leader');
+    }
+    expect(rowByName('Default Role')).toMatchObject({ is_admin: 0, is_owner: 0 });
+    expect(rowByName('Explicit Role')).toMatchObject({ is_admin: 0, is_owner: 0 });
+    const view = (await (await call(me, '/api/me', tok.owner)).json()) as { admin: { leaders: { id: number; name: string; isStaff: boolean }[] } };
+    const staffById = Object.fromEntries(view.admin.leaders.map((l) => [l.id, l.isStaff]));
+    expect(staffById).toMatchObject({ [id.owner]: true, [id.staff]: true, [id.leader]: false, [id.manager]: false });
+    expect(view.admin.leaders.find((l) => l.name === 'Default Role')!.isStaff).toBe(false);
+  });
+
+  it('role "staff" creates a staff row (never an owner) that sees the admin view and can add people itself', async () => {
+    const res = await add(tok.staff, { name: 'New Staffer', role: 'staff', isOwner: true, is_owner: 1, chmsId: 'L101' });
+    expect(res.status).toBe(200);
+    const { url, leader } = (await res.json()) as AddBody;
+    expect(leader.role).toBe('staff');
+    expect(rowByName('New Staffer')).toMatchObject({ id: leader.id, is_admin: 1, is_owner: 0, chms_individual_id: null, token: null, token_hash: await hashToken(url.split('/l/')[1]!) });
+
+    const fresh = url.split('/l/')[1]!;
+    const view = (await (await call(me, '/api/me', fresh)).json()) as { leader: { isAdmin: boolean }; live: boolean; admin?: { leaders: { name: string; isStaff: boolean; isYou: boolean; canManage: boolean }[] } };
+    expect(view.leader.isAdmin).toBe(true);
+    expect(view.live).toBe(false);
+    expect(view.admin!.leaders.find((l) => l.isYou)).toMatchObject({ name: 'New Staffer', isStaff: true });
+    // Same powers as any staff member...
+    const again = await add(fresh, { name: 'Added By New Staffer' });
+    expect(again.status).toBe(200);
+    expect((await call(leaderLink, '/api/leader-link', fresh, { leaderId: id.leader })).status).toBe(200);
+    // ...but the owner's row stays protected.
+    const owner = await call(leaderLink, '/api/leader-link', fresh, { leaderId: id.owner });
+    expect(owner.status).toBe(403);
+    expect(await owner.json()).toEqual({ error: 'owner_protected' });
+  });
+
+  it('refuses any other role with 400 invalid_role and creates nothing', async () => {
+    for (const role of ['owner', 'admin', 'Staff', ' staff', '', null, 1, true, ['staff'], { x: 1 }]) {
+      const res = await add(tok.staff, { name: 'Bad Role', role });
+      expect([role, res.status, await res.json()]).toEqual([role, 400, { error: 'invalid_role' }]);
+    }
+    expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders').get()).toEqual({ n: 5 });
+    expect(t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders WHERE is_owner = 1 AND id > 5').get()).toEqual({ n: 0 });
+  });
+
+  it('non-staff and implicit queue admins still get 403, whatever role they ask for', async () => {
+    for (const who of [tok.leader, tok.manager]) {
+      for (const role of ['leader', 'staff', 'owner']) expect((await add(who, { name: 'Sneaky Person', role })).status).toBe(403);
+    }
+    expect(t.sqlite.prepare("SELECT COUNT(*) AS n FROM leaders WHERE name = 'Sneaky Person'").get()).toEqual({ n: 0 });
+  });
+
   it(`shares the links rate limit: ${RATE_LIMITS.links.max} per window, then 429 with Retry-After`, async () => {
     vi.useFakeTimers({ now: Date.parse('2026-11-18T14:00:10Z'), toFake: ['Date'] });
     try {
@@ -331,7 +383,7 @@ describe('GET /api/me privacy contract', () => {
     expect(items.length).toBeGreaterThan(0);
     for (const i of items) expect(Object.keys(i.individual).sort()).toEqual(['name', 'phone']);
     expect(owner.admin.leaders.map((l: any) => Object.keys(l).sort())[0]).toEqual(
-      ['canManage', 'hasLink', 'id', 'isYou', 'lastSeenAt', 'name', 'notificationsOn'],
+      ['canManage', 'hasLink', 'id', 'isStaff', 'isYou', 'lastSeenAt', 'name', 'notificationsOn'],
     );
     // Staff page views create rows for every ChMS leader, with no link.
     expect(owner.admin.leaders.length).toBeGreaterThan(5);

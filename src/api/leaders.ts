@@ -50,7 +50,9 @@ export async function revokeLink(
   return { ok: true };
 }
 
-export type AddLeaderError = 'forbidden' | 'name_required' | 'name_too_short' | 'name_too_long' | 'invalid_name' | 'name_taken';
+export type LeaderRole = 'leader' | 'staff';
+
+export type AddLeaderError = 'forbidden' | 'invalid_role' | 'name_required' | 'name_too_short' | 'name_too_long' | 'invalid_name' | 'name_taken';
 
 export const NAME_MIN = 2;
 export const NAME_MAX = 60;
@@ -59,7 +61,7 @@ export const NAME_MAX = 60;
 const BAD_NAME_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
 
 /** Trim, collapse inner whitespace, NFC. Returns the cleaned name or the reason it is not acceptable. */
-export function cleanLeaderName(input: unknown): { name: string } | { error: Exclude<AddLeaderError, 'forbidden' | 'name_taken'> } {
+export function cleanLeaderName(input: unknown): { name: string } | { error: Exclude<AddLeaderError, 'forbidden' | 'invalid_role' | 'name_taken'> } {
   if (typeof input !== 'string') return { error: 'name_required' };
   if (BAD_NAME_CHARS.test(input)) return { error: 'invalid_name' };
   const name = input.normalize('NFC').replace(/\s+/g, ' ').trim();
@@ -70,31 +72,42 @@ export function cleanLeaderName(input: unknown): { name: string } | { error: Exc
   return { name };
 }
 
+/** `undefined` (omitted) means a servant leader; anything but "leader" or "staff" is refused. */
+export function parseRole(input: unknown): LeaderRole | null {
+  if (input === undefined) return 'leader';
+  return input === 'leader' || input === 'staff' ? input : null;
+}
+
 /**
- * Staff add a person who is not in ChMS yet: a plain (non-staff, non-owner) leader row with no ChMS id and a
- * fresh personal link. Only the staff check and the name come from the caller; nothing in the request can set
- * admin/owner/ChMS id. The URL exists only in the returned value.
+ * Staff add a person who is not in ChMS yet: a leader row with no ChMS id and a fresh personal link, either a
+ * servant leader (default) or staff (same permissions as any staff member). Only the staff check, the name and
+ * the role come from the caller; nothing in the request can make an owner or set a ChMS id. The URL exists
+ * only in the returned value.
  */
 export async function addLeader(
   store: Pick<Store, 'listLeaders' | 'createLeader'>,
   actor: Pick<LeaderRow, 'isAdmin'>,
   rawName: unknown,
+  rawRole: unknown,
   baseUrl: string,
-): Promise<{ url: string; leader: { id: number; name: string } } | { error: AddLeaderError }> {
+): Promise<{ url: string; leader: { id: number; name: string; role: LeaderRole } } | { error: AddLeaderError }> {
   if (!actor.isAdmin) return { error: 'forbidden' };
+  const role = parseRole(rawRole);
+  if (role === null) return { error: 'invalid_role' };
   const c = cleanLeaderName(rawName);
   if ('error' in c) return c;
   const lower = c.name.toLowerCase();
   // Unicode-aware duplicate check here; the insert itself also refuses (ASCII-case) duplicates atomically.
   if ((await store.listLeaders()).some((l) => l.name.toLowerCase() === lower)) return { error: 'name_taken' };
   const token = generateToken();
-  const id = await store.createLeader(c.name, await hashToken(token));
+  const id = await store.createLeader(c.name, await hashToken(token), role === 'staff');
   if (id === null) return { error: 'name_taken' };
-  return { url: personalLink(baseUrl, token), leader: { id, name: c.name } };
+  return { url: personalLink(baseUrl, token), leader: { id, name: c.name, role } };
 }
 
 export const ADD_LEADER_ERROR_STATUS: Record<AddLeaderError, number> = {
   forbidden: 403,
+  invalid_role: 400,
   name_required: 400,
   name_too_short: 400,
   name_too_long: 400,
