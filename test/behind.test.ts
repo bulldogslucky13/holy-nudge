@@ -12,6 +12,7 @@ import {
   summaryTriggered,
 } from '../src/core/behind';
 import type { Status } from '../src/core/types';
+import { loadSnapshot } from '../src/job/load';
 import { TZ, config, entry, person, queue } from './helpers';
 
 // Tue 2026-06-16 12:00 Chicago (CDT, UTC-5)
@@ -199,6 +200,21 @@ describe('computeNudges', () => {
     // An excluded queue's id does not fall through to a name match either.
     const r = computeNudges([q5, named5], [], config({ excludedQueues: ['Five'] }), NOON, [{ leaderId: 1, queueKeys: ['5'] }]);
     expect(r.coordinators).toEqual([]);
+  });
+  it('an excluded queue already dropped from the snapshot keeps its id reserved: its key never matches a queue by name', async () => {
+    const q5 = queue({ id: '5', name: 'Five' });
+    const named5 = queue({ id: '9', name: '5' });
+    const cfg = config({ excludedQueues: ['Five'] });
+    // As the app really runs: loadSnapshot drops the excluded queue, and remembers its id.
+    const snapshot = await loadSnapshot({ listQueues: async () => [q5, named5], listEntries: async () => [] }, cfg);
+    expect(snapshot.queues.map((q) => q.id)).toEqual(['9']);
+    expect(snapshot.excludedQueueIds).toEqual(['5']);
+    const scopes = [{ leaderId: 1, queueKeys: ['5'] }];
+    expect(computeNudges(snapshot.queues, snapshot.entries, cfg, NOON, scopes, snapshot.excludedQueueIds).coordinators).toEqual([]);
+    expect(queueIdsForKeys(snapshot.queues, ['5'], snapshot.excludedQueueIds)).toEqual([]);
+    // The other queue is still reachable by its own id, and by name for a key that is not a reserved id.
+    expect(queueIdsForKeys(snapshot.queues, ['9'], snapshot.excludedQueueIds)).toEqual(['9']);
+    expect(queueIdsForKeys(snapshot.queues, ['5'], [])).toEqual(['9']);
   });
   it('a coordinator with nothing to report is still listed with empty lists', () => {
     const r = computeNudges([qA], [e('2', 'A', { status: 'DONE' })], config(), NOON, [{ leaderId: 4, queueKeys: ['Alpha'] }]);

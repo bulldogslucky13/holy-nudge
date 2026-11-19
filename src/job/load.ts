@@ -8,6 +8,11 @@ export interface Snapshot {
   /** Non-excluded queues of the configured process. */
   queues: Queue[];
   entries: QueueEntry[];
+  /**
+   * Ids of the process's excluded queues (dropped from `queues`). Coordinator keys are resolved with these
+   * reserved, so a key naming an excluded queue by id can never match another queue by name.
+   */
+  excludedQueueIds?: string[];
 }
 
 export class EmptyProcessError extends Error {
@@ -25,7 +30,8 @@ export async function loadSnapshot(ds: DataSource, config: HolyNudgeConfig): Pro
   const entries: QueueEntry[] = [];
   // Sequential on purpose: gentle on API rate limits.
   for (const q of queues) entries.push(...(await ds.listEntries(q.id)));
-  return { queues, entries };
+  const kept = new Set(queues.map((q) => q.id));
+  return { queues, entries, excludedQueueIds: all.filter((q) => !kept.has(q.id)).map((q) => q.id) };
 }
 
 /**

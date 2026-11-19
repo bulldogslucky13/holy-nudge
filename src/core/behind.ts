@@ -125,12 +125,18 @@ export interface CoordinatorScope {
  * Ids (in `queues` order) of the queues that `keys` name. A key equal to some queue's id matches that queue
  * only; any other key matches every queue with exactly that name (case and spacing count). A key that matches
  * nothing grants nothing.
+ *
+ * `reservedIds` are ids of queues that exist but are not in `queues` (the excluded ones, which the snapshot
+ * drops before anything is computed). A key equal to one of them names that excluded queue and nothing else:
+ * it must never fall through to another queue that happens to have that text as its name.
  */
-export function queueIdsForKeys(queues: readonly Queue[], keys: readonly string[]): string[] {
+export function queueIdsForKeys(queues: readonly Queue[], keys: readonly string[], reservedIds: readonly string[] = []): string[] {
   const ids = new Set(queues.map((q) => q.id));
+  const reserved = new Set(reservedIds);
   const hit = new Set<string>();
   for (const k of keys) {
     if (ids.has(k)) hit.add(k);
+    else if (reserved.has(k)) continue;
     else for (const q of queues) if (q.name === k) hit.add(q.id);
   }
   return queues.filter((q) => hit.has(q.id)).map((q) => q.id);
@@ -219,6 +225,8 @@ export function computeNudges(
   config: HolyNudgeConfig,
   now: Date,
   coordinators: readonly CoordinatorScope[] = [],
+  /** Ids of excluded queues already dropped from `queues` (Snapshot.excludedQueueIds). */
+  reservedIds: readonly string[] = [],
 ): NudgeResults {
   const a = activeData(queues, entries, config, now);
 
@@ -242,7 +250,7 @@ export function computeNudges(
   for (const [leaderId, keys] of [...keysByLeader].sort(([x], [y]) => x - y)) {
     // Resolve against every queue given (so an excluded queue's id cannot fall through to a name match), then
     // keep only the non-excluded ones.
-    const queueIds = queueIdsForKeys(queues, keys).filter((id) => activeIds.has(id));
+    const queueIds = queueIdsForKeys(queues, keys, reservedIds).filter((id) => activeIds.has(id));
     if (queueIds.length === 0) continue;
     out.push({ leaderId, ...scopeView(a, queueIds) });
   }

@@ -88,7 +88,7 @@ export function canManageLink(actor: Pick<LeaderRow, 'isAdmin' | 'isOwner'>, tar
   return actor.isAdmin && (!target.isOwner || actor.isOwner);
 }
 
-export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow, queues: readonly Queue[] = []): LeaderAdminJson {
+export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow, queues: readonly Queue[] = [], reservedIds: readonly string[] = []): LeaderAdminJson {
   const names = new Map(queues.map((q) => [q.id, q.name]));
   return {
     id: l.id,
@@ -100,7 +100,7 @@ export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow, queues: readonl
     canManage: canManageLink(viewer, l),
     isYou: l.id === viewer.id,
     matched: l.chmsIndividualId !== null,
-    coordinates: queueIdsForKeys(queues, l.coordinatorOf).map((id) => names.get(id)!),
+    coordinates: queueIdsForKeys(queues, l.coordinatorOf, reservedIds).map((id) => names.get(id)!),
   };
 }
 
@@ -120,7 +120,7 @@ export interface BuildMeInput {
  */
 export function coordinatorView(leader: LeaderRow, config: HolyNudgeConfig, snapshot: Snapshot, now: Date): AdminResult | undefined {
   if (leader.coordinatorOf.length === 0) return undefined;
-  return computeNudges(snapshot.queues, snapshot.entries, config, now, coordinatorScopes([leader])).coordinators[0];
+  return computeNudges(snapshot.queues, snapshot.entries, config, now, coordinatorScopes([leader]), snapshot.excludedQueueIds).coordinators[0];
 }
 
 /** True if this leader gets a whole-queue view: staff (is_admin), or a coordinator of some current queue. */
@@ -209,7 +209,7 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
     };
     // Link management is for staff (is_admin) only, never for coordinators.
     if (leader.isAdmin) {
-      out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader, snapshot.queues)).sort(byName);
+      out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader, snapshot.queues, snapshot.excludedQueueIds)).sort(byName);
       out.admin.leadPeople = availableLeadPeople(leaders, peopleSeen(snapshot));
     }
   }

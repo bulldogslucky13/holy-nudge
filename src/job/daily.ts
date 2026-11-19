@@ -99,7 +99,7 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     };
 
     // Whole-queue summaries go only to staff and to rows marked as coordinators (queue_coordinators).
-    const nudges = computeNudges(snapshot.queues, snapshot.entries, config, now, coordinatorScopes(rows));
+    const nudges = computeNudges(snapshot.queues, snapshot.entries, config, now, coordinatorScopes(rows), snapshot.excludedQueueIds);
     let delivery: DeliveryCounts = emptyCounts();
     /** People told about their own students (alone or in a combined push). */
     let leadersNudged = 0;
