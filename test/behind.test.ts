@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { computeNudges, isBehind, isStaleUnassigned } from '../src/core/behind';
+import {
+  computeNudges,
+  isBehind,
+  isNewSinceLastRun,
+  isOverdue,
+  isPastFirstText,
+  isUnassigned,
+  ownTriggered,
+  summaryTriggered,
+} from '../src/core/behind';
 import type { Status } from '../src/core/types';
 import { TZ, config, entry, person, queue } from './helpers';
 
@@ -95,74 +104,16 @@ describe('isBehind: due formats', () => {
   });
 });
 
-describe('isStaleUnassigned', () => {
-  const created = '2026-06-10T12:00:00Z';
-  const c = new Date(created).getTime();
-  const min = 60 * 1000;
-  const stale = (over: Parameters<typeof entry>[0], nowMs: number) =>
-    isStaleUnassigned(entry({ assignee: null, created, ...over }), new Date(nowMs), TZ);
-
-  it('23h59m is not stale, 24h01m is', () => {
-    expect(stale({}, c + 24 * 60 * min - min)).toBe(false);
-    expect(stale({}, c + 24 * 60 * min + min)).toBe(true);
+describe('isUnassigned (the Unassigned list)', () => {
+  it('is every not-DONE entry with nobody assigned, however recently it arrived', () => {
+    expect(isUnassigned(entry({ assignee: null, status: 'NOT_STARTED' }))).toBe(true);
+    expect(isUnassigned(entry({ assignee: null, status: 'IN_PROCESS' }))).toBe(true);
+    expect(isUnassigned(entry({ assignee: null, status: 'WAITING' }))).toBe(true);
+    expect(isUnassigned(entry({ assignee: null, status: 'NOT_STARTED', created: '2099-01-01' }))).toBe(true);
   });
-  it('exactly 24h is not stale ("more than")', () => {
-    expect(stale({}, c + 24 * 60 * min)).toBe(false);
-  });
-  it('assigned or DONE is never stale-unassigned', () => {
-    const now = c + 100 * 60 * min;
-    expect(stale({ assignee: person('L1') }, now)).toBe(false);
-    expect(stale({ status: 'DONE' }, now)).toBe(false);
-    expect(stale({ status: 'NOT_STARTED' }, now)).toBe(true);
-    expect(stale({ status: 'WAITING' }, now)).toBe(true);
-  });
-  it('uses elapsed time across spring-forward (wall-clock day later, only 23h elapsed)', () => {
-    const createdLocal = '2026-03-07T12:00:00-06:00'; // noon CST Mar 7
-    const e = entry({ assignee: null, created: createdLocal });
-    expect(isStaleUnassigned(e, new Date('2026-03-08T12:00:00-05:00'), TZ)).toBe(false); // 23h elapsed
-    expect(isStaleUnassigned(e, new Date('2026-03-08T12:59:00-05:00'), TZ)).toBe(false); // 23h59m
-    expect(isStaleUnassigned(e, new Date('2026-03-08T13:01:00-05:00'), TZ)).toBe(true); // 24h01m
-  });
-  it('uses elapsed time across fall-back (25h of wall clock is still just 24h elapsed at the edge)', () => {
-    const createdLocal = '2026-10-31T12:00:00-05:00'; // noon CDT Oct 31
-    const e = entry({ assignee: null, created: createdLocal });
-    expect(isStaleUnassigned(e, new Date('2026-11-01T10:59:00-06:00'), TZ)).toBe(false); // 23h59m
-    expect(isStaleUnassigned(e, new Date('2026-11-01T11:01:00-06:00'), TZ)).toBe(true); // 24h01m
-  });
-
-  describe('date-only created (Pushpay guide shows "YYYY-MM-DD") counts from the end of that Central day', () => {
-    const e = entry({ assignee: null, created: '2026-01-14' }); // ends at 2026-01-15 00:00 CST = 06:00Z
-    it('is not stale during the day it was created, nor the whole next day', () => {
-      expect(isStaleUnassigned(e, new Date('2026-01-14T23:30:00-06:00'), TZ)).toBe(false);
-      expect(isStaleUnassigned(e, new Date('2026-01-15T08:00:00-06:00'), TZ)).toBe(false); // next morning: would be 38h from UTC midnight
-      expect(isStaleUnassigned(e, new Date('2026-01-15T23:59:00-06:00'), TZ)).toBe(false);
-      expect(isStaleUnassigned(e, new Date('2026-01-16T00:00:00-06:00'), TZ)).toBe(false); // exactly 24h
-    });
-    it('is stale just after the following midnight', () => {
-      expect(isStaleUnassigned(e, new Date('2026-01-16T00:01:00-06:00'), TZ)).toBe(true);
-      expect(isStaleUnassigned(e, new Date('2026-01-16T08:00:00-06:00'), TZ)).toBe(true);
-    });
-    it('uses the Central day, not the UTC day, in summer (CDT)', () => {
-      const s = entry({ assignee: null, created: '2026-07-01' }); // ends 2026-07-02 00:00 CDT = 05:00Z
-      expect(isStaleUnassigned(s, new Date('2026-07-03T04:59:00Z'), TZ)).toBe(false); // 23:59 CDT Jul 2
-      expect(isStaleUnassigned(s, new Date('2026-07-03T05:01:00Z'), TZ)).toBe(true);
-    });
-    it('handles a created day that ends on a DST change', () => {
-      // Mar 7 ends at Mar 8 00:00 CST (06:00Z); 24h later is 06:00Z Mar 9 = 01:00 CDT Mar 9.
-      const s = entry({ assignee: null, created: '2026-03-07' });
-      expect(isStaleUnassigned(s, new Date('2026-03-09T05:59:00Z'), TZ)).toBe(false);
-      expect(isStaleUnassigned(s, new Date('2026-03-09T06:01:00Z'), TZ)).toBe(true);
-    });
-  });
-
-  it('takes a datetime with no offset as Central wall time', () => {
-    const e = entry({ assignee: null, created: '2026-01-14 09:00:00' }); // 15:00Z
-    expect(isStaleUnassigned(e, new Date('2026-01-15T14:59:00Z'), TZ)).toBe(false);
-    expect(isStaleUnassigned(e, new Date('2026-01-15T15:01:00Z'), TZ)).toBe(true);
-  });
-
-  it('rejects an unparseable created value', () => {
-    expect(() => isStaleUnassigned(entry({ assignee: null, created: 'soon' }), new Date(), TZ)).toThrow(RangeError);
+  it('assigned or DONE is never unassigned', () => {
+    expect(isUnassigned(entry({ assignee: person('L1') }))).toBe(false);
+    expect(isUnassigned(entry({ assignee: null, status: 'DONE' }))).toBe(false);
   });
 });
 
@@ -213,8 +164,8 @@ describe('computeNudges', () => {
       ['L1', ['3']],
       [null, ['4']],
     ]);
-    expect(m2r.staleUnassigned.map((x) => x.id)).toEqual(['4']);
-    expect(m1r.staleUnassigned).toEqual([]);
+    expect(m2r.unassigned.map((x) => x.id)).toEqual(['4']);
+    expect(m1r.unassigned).toEqual([]);
   });
   it('config mapping overrides managers (by name or id); empty mapping falls back', () => {
     const cfg = config({ adminsByQueue: { Alpha: ['X9', 'M2'], B: [] } });
@@ -231,7 +182,166 @@ describe('computeNudges', () => {
     const r = computeNudges([qA], [e('2', 'A', { status: 'DONE' })], config(), NOON);
     expect(r.leaders).toEqual([]);
     expect(r.admins).toEqual([
-      { adminId: 'M1', name: 'Mgr One', queueIds: ['A'], staleUnassigned: [], behindByLeader: [] },
+      { adminId: 'M1', name: 'Mgr One', queueIds: ['A'], unassigned: [], behindByLeader: [] },
     ]);
+  });
+});
+
+describe('when the push fires', () => {
+  const cfg = config();
+  const H = 3600_000;
+  // Mornings at 08:00 Chicago (CST in January = 14:00Z).
+  const morning = (day: number) => new Date(Date.UTC(2026, 0, day, 14));
+  const win = (day: number, lastDay: number | null = day - 1) => ({ now: morning(day), lastRunAt: lastDay === null ? null : morning(lastDay) });
+
+  describe('isNewSinceLastRun', () => {
+    it('is new when created after the start of the last successful run, not at or before it', () => {
+      const w = win(15);
+      expect(isNewSinceLastRun(entry({ created: '2026-01-14T14:00:01Z' }), w, TZ)).toBe(true);
+      expect(isNewSinceLastRun(entry({ created: '2026-01-14T14:00:00Z' }), w, TZ)).toBe(false);
+      expect(isNewSinceLastRun(entry({ created: '2026-01-13T20:00:00Z' }), w, TZ)).toBe(false);
+    });
+    it('uses the last successful run, however long ago (a failed day in between misses nobody)', () => {
+      const w = win(15, 12);
+      expect(isNewSinceLastRun(entry({ created: '2026-01-12T20:00:00Z' }), w, TZ)).toBe(true);
+    });
+    it('with no previous run, the last 24 hours count as new', () => {
+      const w = win(15, null);
+      expect(isNewSinceLastRun(entry({ created: new Date(morning(15).getTime() - 24 * H + 60_000).toISOString() }), w, TZ)).toBe(true);
+      expect(isNewSinceLastRun(entry({ created: new Date(morning(15).getTime() - 24 * H - 60_000).toISOString() }), w, TZ)).toBe(false);
+      // Date-only yesterday ends at today's midnight (8h ago): new. The day before: 32h, not new.
+      expect(isNewSinceLastRun(entry({ created: '2026-01-14' }), w, TZ)).toBe(true);
+      expect(isNewSinceLastRun(entry({ created: '2026-01-13' }), w, TZ)).toBe(false);
+    });
+
+    describe('date-only created: never missed, new on at most two consecutive mornings', () => {
+      // Arrived on Jan 14, recorded as "2026-01-14" (taken as the end of that day, Jan 15 00:00 CST).
+      const e = entry({ created: '2026-01-14' });
+      const newOn = (day: number) => isNewSinceLastRun(e, win(day), TZ);
+      it('already in the queue at the Jan 14 run: new on Jan 14 and again on Jan 15 (the one accepted repeat)', () => {
+        expect([newOn(14), newOn(15), newOn(16), newOn(17)]).toEqual([true, true, false, false]);
+      });
+      it('added after the Jan 14 run: not seen that morning, new on Jan 15, quiet after', () => {
+        // The Jan 14 run could not see it; the first run that can is Jan 15, and it is new there.
+        expect([newOn(15), newOn(16)]).toEqual([true, false]);
+      });
+      it('a datetime created is new exactly once', () => {
+        const early = entry({ created: '2026-01-14T07:00:00-06:00' }); // before the Jan 14 run
+        expect([14, 15, 16].map((day) => isNewSinceLastRun(early, win(day), TZ))).toEqual([true, false, false]);
+        const late = entry({ created: '2026-01-14T10:00:00-06:00' }); // after it: first seen Jan 15
+        expect([15, 16].map((day) => isNewSinceLastRun(late, win(day), TZ))).toEqual([true, false]);
+      });
+      it('after a missed morning (run failed on Jan 15), still new on Jan 16 and not after', () => {
+        expect(isNewSinceLastRun(e, win(16, 14), TZ)).toBe(true);
+        expect(isNewSinceLastRun(e, win(17, 16), TZ)).toBe(false);
+      });
+    });
+  });
+
+  describe('isOverdue', () => {
+    const now = morning(15);
+    const o = (over: Parameters<typeof entry>[0]) => isOverdue(entry(over), now, cfg);
+    it('with a due date: overdue once the due calendar date is before today, whatever the status (not DONE)', () => {
+      for (const status of ['NOT_STARTED', 'IN_PROCESS', 'WAITING'] as Status[]) {
+        expect(o({ status, due: '2026-01-14' })).toBe(true);
+        expect(o({ status, due: '2026-01-15' })).toBe(false);
+      }
+      expect(o({ status: 'DONE', due: '2026-01-01' })).toBe(false);
+    });
+    it('the due date wins over age: an old Not Started card due next week is not overdue', () => {
+      expect(o({ status: 'NOT_STARTED', due: '2026-01-20', created: '2025-12-01T00:00:00Z' })).toBe(false);
+    });
+    it('no due date, Not Started: overdue only after followUpDays (7) of elapsed time', () => {
+      const ago = (ms: number) => new Date(now.getTime() - ms).toISOString();
+      expect(o({ status: 'NOT_STARTED', created: ago(7 * 24 * H - 60_000) })).toBe(false);
+      expect(o({ status: 'NOT_STARTED', created: ago(7 * 24 * H) })).toBe(false);
+      expect(o({ status: 'NOT_STARTED', created: ago(7 * 24 * H + 60_000) })).toBe(true);
+      expect(isOverdue(entry({ status: 'NOT_STARTED', created: ago(4 * 24 * H) }), now, { ...cfg, followUpDays: 3 })).toBe(true);
+    });
+    it('no due date, In Process or Waiting: never overdue', () => {
+      for (const status of ['IN_PROCESS', 'WAITING'] as Status[]) expect(o({ status, created: '2025-06-01T00:00:00Z' })).toBe(false);
+    });
+    it('a date-only created counts its week from the end of that day', () => {
+      // Jan 7 ends Jan 8 00:00 CST; a week later is Jan 15 00:00, so the Jan 15 08:00 run is the first overdue morning.
+      expect(isOverdue(entry({ status: 'NOT_STARTED', created: '2026-01-07' }), morning(14), cfg)).toBe(false);
+      expect(isOverdue(entry({ status: 'NOT_STARTED', created: '2026-01-07' }), morning(15), cfg)).toBe(true);
+    });
+  });
+
+  describe('isPastFirstText (72 hours)', () => {
+    const created = '2026-01-12T14:00:00Z';
+    const at = (ms: number) => new Date(Date.parse(created) + ms);
+    it('more than 72 elapsed hours', () => {
+      expect(isPastFirstText(entry({ created }), at(72 * H), cfg)).toBe(false);
+      expect(isPastFirstText(entry({ created }), at(72 * H + 60_000), cfg)).toBe(true);
+      expect(isPastFirstText(entry({ created }), at(49 * H), { ...cfg, firstTextHours: 48 })).toBe(true);
+    });
+    it('uses elapsed time across spring-forward (three wall-clock days are only 71 hours)', () => {
+      const e = entry({ created: '2026-03-06T12:00:00-06:00' }); // noon CST Fri Mar 6
+      expect(isPastFirstText(e, new Date('2026-03-09T12:00:00-05:00'), cfg)).toBe(false); // 71h
+      expect(isPastFirstText(e, new Date('2026-03-09T13:01:00-05:00'), cfg)).toBe(true); // 72h01m
+    });
+    it('date-only created counts from the end of that Central day; no-offset datetimes are Central wall time', () => {
+      const d = entry({ created: '2026-01-11' }); // ends Jan 12 00:00 CST = 06:00Z
+      expect(isPastFirstText(d, new Date('2026-01-15T06:00:00Z'), cfg)).toBe(false);
+      expect(isPastFirstText(d, new Date('2026-01-15T06:01:00Z'), cfg)).toBe(true);
+      const l = entry({ created: '2026-01-12 09:00:00' }); // 15:00Z
+      expect(isPastFirstText(l, new Date('2026-01-15T15:01:00Z'), cfg)).toBe(true);
+      expect(isPastFirstText(l, new Date('2026-01-15T14:59:00Z'), cfg)).toBe(false);
+    });
+    it('rejects an unparseable created value', () => {
+      expect(() => isPastFirstText(entry({ created: 'soon' }), new Date(), cfg)).toThrow(RangeError);
+    });
+  });
+
+  describe('ownTriggered: a leader\'s own push', () => {
+    const w = win(15);
+    const hoursAgo = (h: number) => new Date(morning(15).getTime() - h * H).toISOString();
+    const fires = (over: Parameters<typeof entry>[0]) => ownTriggered([entry(over)], w, cfg);
+    it('fires for a new Not Started student, then is quiet through the grace week', () => {
+      expect(fires({ status: 'NOT_STARTED', created: hoursAgo(2) })).toBe(true);
+      expect(fires({ status: 'NOT_STARTED', created: hoursAgo(30) })).toBe(false);
+      expect(fires({ status: 'NOT_STARTED', created: hoursAgo(6 * 24) })).toBe(false);
+    });
+    it('fires daily once overdue, by age or by due date', () => {
+      expect(fires({ status: 'NOT_STARTED', created: hoursAgo(8 * 24) })).toBe(true);
+      expect(fires({ status: 'IN_PROCESS', due: '2026-01-13', created: hoursAgo(30) })).toBe(true);
+    });
+    it('a new student already In Process does not fire; Done never does', () => {
+      expect(fires({ status: 'IN_PROCESS', created: hoursAgo(2) })).toBe(false);
+      expect(fires({ status: 'DONE', due: '2026-01-01', created: hoursAgo(2) })).toBe(false);
+    });
+    it('one firing student is enough', () => {
+      expect(ownTriggered([entry({ status: 'NOT_STARTED', created: hoursAgo(30) }), entry({ status: 'NOT_STARTED', created: hoursAgo(1) })], w, cfg)).toBe(true);
+    });
+  });
+
+  describe('summaryTriggered: a queue summary', () => {
+    const m1 = person('M1', 'Mgr One');
+    const qA = queue({ id: 'A', name: 'Alpha', managers: [m1] });
+    const w = win(15);
+    const hoursAgo = (h: number) => new Date(morning(15).getTime() - h * H).toISOString();
+    const fires = (...es: Parameters<typeof entry>[0][]) => {
+      const r = computeNudges([qA], es.map((over, i) => entry({ id: `x${i}`, queueId: 'A', ...over })), cfg, w.now);
+      return summaryTriggered(r.admins[0]!, w, cfg);
+    };
+    it('fires for a new unassigned student, any status', () => {
+      expect(fires({ assignee: null, status: 'NOT_STARTED', created: hoursAgo(3) })).toBe(true);
+      expect(fires({ assignee: null, status: 'IN_PROCESS', created: hoursAgo(3) })).toBe(true);
+    });
+    it('is quiet for an unassigned student 2 days old, fires again once past 72 hours', () => {
+      expect(fires({ assignee: null, status: 'NOT_STARTED', created: hoursAgo(48) })).toBe(false);
+      expect(fires({ assignee: null, status: 'NOT_STARTED', created: hoursAgo(96) })).toBe(true);
+    });
+    it('does not fire just because someone else got a new assignment', () => {
+      expect(fires({ assignee: person('L1', 'Lee'), status: 'NOT_STARTED', created: hoursAgo(2) })).toBe(false);
+    });
+    it('fires when an assigned student in scope is overdue', () => {
+      expect(fires({ assignee: person('L1', 'Lee'), status: 'NOT_STARTED', created: hoursAgo(8 * 24) })).toBe(true);
+      expect(fires({ assignee: person('L1', 'Lee'), status: 'WAITING', due: '2026-01-10', created: hoursAgo(30) })).toBe(true);
+    });
+    it('Done students never fire it', () => {
+      expect(fires({ assignee: null, status: 'DONE', created: hoursAgo(2) }, { assignee: null, status: 'DONE', created: hoursAgo(200) })).toBe(false);
+    });
   });
 });

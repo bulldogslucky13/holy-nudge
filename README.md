@@ -1,6 +1,6 @@
 # Holy Nudge
 
-A small installable web app (PWA) that sends college-ministry servant leaders one friendly push each morning when students in their Pushpay ChMS process queues are waiting on them. Admins get a summary and a view of everyone unassigned or behind. Read-only: it never writes to ChMS. Push messages carry counts only; names and contact details appear only inside the app, behind each leader's personal link.
+A small installable web app (PWA) that sends college-ministry servant leaders a friendly morning push when a student in their Pushpay ChMS process queues is new or overdue (see "When nudges go out"). Admins get a summary and a view of everyone unassigned or behind. Read-only: it never writes to ChMS. Push messages carry counts only; names and contact details appear only inside the app, behind each leader's personal link.
 
 Product brief: `ORCHESTRATOR_PROMPT.md`. Technical shape and rules: `docs/ARCHITECTURE.md`. Pushpay API notes: `docs/chms-api-notes.md`.
 
@@ -89,6 +89,18 @@ Until step 4 is done, `/oauth/start` shows "credentials are not configured yet" 
 
 Pushpay refresh tokens are single-use. If one is ever lost (a refresh response that never arrived, or a database write that failed), the owner gets the push "Holy Nudge lost its Pushpay connection. A Master Admin needs to approve it again." Until then the app shows "we couldn't load your list" and no nudges go out. Fix: the Master Admin opens the same `/oauth/start?key=...` link again and approves. The new token replaces the old one; nothing else to do. Other failures send a different alert ("could not read ChMS", "only got part of the ChMS data"); check `job_runs` and the Worker logs.
 
+## When nudges go out
+
+The morning job decides, person by person, whether there is anything worth a push. It follows the church's written process: coordinators send a first text within 72 hours and assign the card, and the assigned leader follows up within a week.
+
+- **Your own students.** A push the first morning a student assigned to you arrives Not Started, then quiet for their first week, then every morning once they are overdue, until Done. Overdue means past the Lead due date or, with no due date, still Not Started after 7 days (`followUpDays`). In Process or Waiting with no due date never triggers a push.
+- **Unassigned students** (queue managers and staff). A push the morning one arrives, then every morning once they have waited more than 72 hours (`firstTextHours`) with nobody assigned.
+- **Other leaders' students** (queue managers and staff). Only once one is overdue. Someone else getting a new student is not a reason to nudge you.
+
+Still at most one push per person, and when it goes out it carries the full counts, the same numbers the app shows, not just what triggered it. The app's lists are unchanged, except that the Unassigned tab now lists every unassigned student however recently they arrived.
+
+"New" means the student entered the queue after the last successful morning run started (the very first run counts the last 24 hours). Nothing about students is kept to work this out, only the time of each run in `job_runs`. Lead may give only a date for when someone entered a queue; such a student counts from the end of that day, so they can be nudged two mornings running but are never missed. A failed run does not count, page views never move it, a push that was due but reached none of a person's devices is tried again the next morning for that person alone (the run summary keeps their leader row id and the window start in `retryFrom`, nothing about students), and each run's summary counts how many people were skipped for having nothing new or overdue (`skippedNothingNewOrOverdue`). Lead does not say when a card was assigned, so a student assigned to you days after they arrived is not "new" for you: they appear on your list at once, and the push follows once they are overdue.
+
 ## Configuration
 
 `config/holy-nudge.config.json` (bundled at deploy, so redeploy both after editing):
@@ -97,6 +109,7 @@ Pushpay refresh tokens are single-use. If one is ever lost (a refresh response t
 - `excludedQueues`: queue names (exact) or ids to ignore, such as the "DONE- do not move here unless you have left a note" and "Not Interested" parking queues.
 - `adminsByQueue`: queue name or id mapped to a list of ChMS individual ids who get that queue's admin summary. A queue that is missing or has an empty list falls back to its ChMS queue managers.
 - `timeZone`, `morningHour`: when the nudge goes out.
+- `followUpDays` (default 7), `firstTextHours` (default 72): how long before a student counts as overdue for their leader, and how long one may wait unassigned, before the morning nudge repeats daily. See "When nudges go out".
 - `chmsBaseUrl`, `queueUrlTemplate`: the "Open in ChMS" link (`{chmsBaseUrl}` and `{queueId}` are filled in). `adminQueueUrlTemplate` (optional) is the admin-view link: one queue, one status, every assignee (`{statusId}` is filled in).
 
 ## Adding leaders and sending links

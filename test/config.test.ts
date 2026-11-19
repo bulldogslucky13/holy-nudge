@@ -19,6 +19,16 @@ describe('config', () => {
     expect(() => parseConfig({ ...ok, dataSource: 'csv' })).toThrow(/dataSource/);
     expect(() => parseConfig({ ...ok, adminsByQueue: { Staff: 'M1' } })).toThrow(/adminsByQueue/);
     expect(() => parseConfig({ ...ok, excludedQueues: [1] })).toThrow(/excludedQueues/);
+    expect(() => parseConfig({ ...ok, followUpDays: 0 })).toThrow(/followUpDays/);
+    expect(() => parseConfig({ ...ok, followUpDays: 1.5 })).toThrow(/followUpDays/);
+    expect(() => parseConfig({ ...ok, firstTextHours: '72' })).toThrow(/firstTextHours/);
+  });
+  it('nudge-timing thresholds default to one week and 72 hours', () => {
+    const ok = loadConfig();
+    expect(ok).toMatchObject({ followUpDays: 7, firstTextHours: 72 });
+    const { followUpDays: _d, firstTextHours: _h, ...rest } = ok;
+    expect(parseConfig(rest)).toMatchObject({ followUpDays: 7, firstTextHours: 72 });
+    expect(parseConfig({ ...ok, followUpDays: 10, firstTextHours: 48 })).toMatchObject({ followUpDays: 10, firstTextHours: 48 });
   });
   it('builds queue URLs from the default or a configured template', () => {
     const ok = loadConfig();

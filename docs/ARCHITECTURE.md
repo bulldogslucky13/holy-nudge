@@ -66,13 +66,25 @@ The live implementation maps Pushpay responses into these types; nothing outside
 - `isBehind(entry, now, tz)`: `status === NOT_STARTED`, OR (`status !== DONE` AND due date has passed).
 - "Due date has passed" = the due calendar date is strictly before today's calendar date in the configured time zone (`America/Chicago`). Due today is not behind. A due value with a time component is converted to a Central calendar date first.
 - `WAITING` with a future (or today's) due date is not behind. `DONE` is never behind. Null due + not `NOT_STARTED` is not behind.
-- `isStaleUnassigned(entry, now, tz)`: `assignee === null`, status not `DONE`, and `created` more than 24 hours before `now` (elapsed time, not calendar days). The Pushpay guide shows `created` (and `due`) as date-only values: a date-only `created` is taken as the end of that calendar day in the configured zone (the next local midnight), so it never flags early. A `created` datetime with no offset is Central wall time; one with an offset is exact.
+- `isUnassigned(entry)`: `assignee === null` and status not `DONE`, however recently they arrived. This is the Unassigned list and count (it used to hide students younger than 24 hours; it no longer does, so a first-morning push never points at an empty tab). When it is worth a push is a separate rule: see "When the push fires" below.
 - Excluded queues (config, by queue id and/or exact name) are dropped before any rule runs.
-- Output of the job computation: per leader (assignee id) list of behind entries; per admin: stale-unassigned entries plus behind entries grouped by leader, for the queues they administer. Admins for a queue = config mapping, defaulting to that queue's managers.
+- Output of the job computation: per leader (assignee id) list of behind entries; per admin: unassigned entries plus behind entries grouped by leader, for the queues they administer. Admins for a queue = config mapping, defaulting to that queue's managers.
+
+### When the push fires
+
+The lists and counts above are what is waiting; these rules only decide whether a person gets their push this morning (`ownTriggered`, `summaryTriggered`). Pure: `now` and `lastRunAt` (start of the last successful daily run, `job_runs.started_at` with `ok = 1`, via `Store.lastSuccessfulRunStart`) are passed in.
+
+- `isNewSinceLastRun(entry, {now, lastRunAt}, tz)`: `created` (via `createdToInstant`) is after `lastRunAt`; with no previous successful run, within the 24 hours before `now`. A date-only `created` is the end of that Central day, so a student is new on at most two consecutive mornings (the day itself if already queued at that run, and the next) and never missed. Start-of-day would miss anyone added after that morning's run.
+- `isOverdue(entry, now, config)`: not `DONE`, and the due date is before today (as `isBehind`), or with no due date, `NOT_STARTED` and `created` more than `followUpDays` (7) of elapsed time ago. In Process / Waiting with no due date: never.
+- `isPastFirstText(entry, now, config)`: `created` more than `firstTextHours` (72) of elapsed time ago.
+- Own push: any of the leader's behind entries is (`NOT_STARTED` and new) or overdue.
+- Summary push: any unassigned entry in scope is new or past the first-text window, or any assigned entry in scope is overdue. A new assignment to someone else never triggers it.
+
+The job sends the person's one push when either fired, built from the full counts as before. Nothing about students is stored: the window is one timestamp per run, and only the daily job writes `job_runs` (GET `/api/me` and every other path read nothing from it and never write it).
 
 ## Config (`config/holy-nudge.config.json`)
 
-`processId` ("37"), `excludedQueues` (names: the "DONE- do not move here unless you have left a note" queue and "Not Interested"; welcome-email queues need no exclusion since all Done), `adminsByQueue` (queue name/id -> ChMS individual ids; empty = use managers), `timeZone`, `morningHour` (8), `dataSource` ("fixture" | "pushpay"), `chmsBaseUrl` for deep links (`https://wildwood.ccbchurch.com`).
+`processId` ("37"), `excludedQueues` (names: the "DONE- do not move here unless you have left a note" queue and "Not Interested"; welcome-email queues need no exclusion since all Done), `adminsByQueue` (queue name/id -> ChMS individual ids; empty = use managers), `timeZone`, `morningHour` (8), `followUpDays` (7), `firstTextHours` (72), `dataSource` ("fixture" | "pushpay"), `chmsBaseUrl` for deep links (`https://wildwood.ccbchurch.com`).
 
 ## D1 tables
 
@@ -111,7 +123,7 @@ Security headers: `public/_headers` covers static files; Pages does not apply it
 
 ## Daily job
 
-Cron fires at 13:00 and 14:00 UTC; job proceeds only when the Central local hour equals `morningHour` (handles DST). At most one push per person per morning: their own behind count (leader nudge), their admin summary, or, when they have both, one combined push titled like the leader nudge with the body "12 waiting across your queues, 3 unassigned" (queue managers) or "... across all queues ..." (staff), the unassigned part only when non-zero; it has `kind: "leader"` and their own `count`, so it lands on their own list. The run summary counts `leadersNudged` (told about their own students, alone or combined), `adminsNudged` (told a summary, alone or combined), `combinedNudged`, and `leadersMatched` (rows matched to Lead this run). While `dataSource` is `fixture` (not live) only staff rows (`is_admin = 1`) are nudged: a non-staff row, even one that maps to a sample leader or queue manager, gets nothing, and a row with no `chms_individual_id` never gets a leader nudge (nudges are matched by ChMS id; only staff get the global admin summary). On data-source error: record failed run and push an alert to admins flagged as owner.
+Cron fires at 13:00 and 14:00 UTC; job proceeds only when the Central local hour equals `morningHour` (handles DST). At most one push per person per morning, and only when their own students or their summary has something new or overdue ("When the push fires" above): their own behind count (leader nudge), their admin summary, or, when they have both, one combined push titled like the leader nudge with the body "12 waiting across your queues, 3 unassigned" (queue managers) or "... across all queues ..." (staff), the unassigned part only when non-zero; it has `kind: "leader"` and their own `count`, so it lands on their own list. The run summary counts `leadersNudged` (told about their own students, alone or combined), `adminsNudged` (told a summary, alone or combined), `combinedNudged`, `leadersMatched` (rows matched to Lead this run), and for the timing rules `newAssigned`, `newUnassigned`, `overdueAssigned`, `unassignedPastFirstText` (students, across all queues), `ownTriggered`, `summaryTriggered`, `skippedNothingNewOrOverdue` (people with something waiting but nothing new or overdue) `firstRunFallback` (no previous successful run), `undelivered` (people whose due push reached none of their devices) and `retryFrom` (leader row id to window start for those people; the next run looks back that far for them alone, for at most `followUpDays`). While `dataSource` is `fixture` (not live) only staff rows (`is_admin = 1`) are nudged: a non-staff row, even one that maps to a sample leader or queue manager, gets nothing, and a row with no `chms_individual_id` never gets a leader nudge (nudges are matched by ChMS id; only staff get the global admin summary). On data-source error: record failed run and push an alert to admins flagged as owner.
 
 ## Addendum: API contract and ownership (build phase 2)
 
@@ -142,7 +154,7 @@ All API errors: `{ "error": "<code>" }` with 4xx/5xx. Invalid, missing or turned
     "individual": { "name": "Pat Example", "phone": "405-555-0101" }
   } ],
   "admin": {
-    "staleUnassigned": [ { "...item fields": "", "hoursWaiting": 60 } ],
+    "unassigned": [ { "...item fields": "", "hoursWaiting": 60 } ],
     "byLeader": [ { "leader": { "name": "Sam Fakename" }, "notificationsOn": false, "items": [ ] } ],
     "leadersWithoutNotifications": [ { "name": "Sam Fakename" } ],
     "leaders": [ {

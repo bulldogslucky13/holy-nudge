@@ -23,6 +23,9 @@ const snapshot = {
     entry({ id: 'e2', queueId: 'q1', status: 'NOT_STARTED', due: '2026-01-20', assignee: lee }),
     entry({ id: 'e3', queueId: 'q1', status: 'NOT_STARTED', assignee: null, created: '2026-01-12T14:00:00Z' }),
     entry({ id: 'e4', queueId: 'q1', status: 'IN_PROCESS', due: '2026-01-14T23:30:00-06:00', assignee: person('L2', 'Liv') }),
+    // Unassigned but not behind (In Process, no due date): only on the Unassigned list.
+    entry({ id: 'e5', queueId: 'q1', status: 'IN_PROCESS', assignee: null, created: '2026-01-15T13:00:00Z' }),
+    entry({ id: 'e6', queueId: 'q1', status: 'IN_PROCESS', assignee: null, created: '2026-01-15' }),
   ],
 };
 
@@ -53,7 +56,7 @@ describe('GET /api/me response', () => {
     expect(JSON.stringify(me)).not.toMatch(/email|@example\.com/);
   });
 
-  it('queue-manager admin view: stale unassigned, by leader (unassigned last), missing notifications, NO leader list', () => {
+  it('queue-manager admin view: unassigned, by leader (unassigned last), missing notifications, NO leader list', () => {
     const leaders = [
       row({ id: 1, chmsIndividualId: 'L1', name: 'Lee', subscriptionCount: 1 }),
       row({ id: 2, chmsIndividualId: 'L2', name: 'Liv' }),
@@ -63,7 +66,9 @@ describe('GET /api/me response', () => {
     expect(me.leader.isAdmin).toBe(true);
     expect(me.behind).toEqual([]);
     const a = me.admin!;
-    expect(a.staleUnassigned.map((i) => [i.entryId, i.hoursWaiting, i.daysOverdue])).toEqual([['e3', 72, null]]);
+    // Every unassigned student, longest wait first: no longer only those waiting more than a day.
+    // A date-only `created` of today counts from the end of the day, so it shows 0 hours, never negative.
+    expect(a.unassigned.map((i) => [i.entryId, i.hoursWaiting, i.daysOverdue])).toEqual([['e3', 72, null], ['e5', 1, null], ['e6', 0, null]]);
     expect(a.byLeader.map((g) => [g.leader, g.notificationsOn, g.items.map((i) => i.entryId)])).toEqual([
       [{ name: 'Lee' }, true, ['e1', 'e2']],
       [{ name: 'Liv' }, false, ['e4']],
@@ -76,7 +81,7 @@ describe('GET /api/me response', () => {
     expect('leaders' in a).toBe(false);
     expect('leadPeople' in a).toBe(false);
     expect(JSON.stringify(me)).not.toMatch(/\/l\/|"url"|token/i);
-    for (const i of [...a.staleUnassigned, ...a.byLeader.flatMap((g) => g.items)]) expect(Object.keys(i.individual)).toEqual(['name', 'phone']);
+    for (const i of [...a.unassigned, ...a.byLeader.flatMap((g) => g.items)]) expect(Object.keys(i.individual)).toEqual(['name', 'phone']);
   });
 
   it('staff (is_admin) see every queue and the leader list (no links); non-admins get no admin key', async () => {

@@ -373,13 +373,22 @@ describe('GET /api/me before real data is connected (fixture)', () => {
   });
 });
 
+describe('GET /api/me and the nudge window', () => {
+  it('never writes job_runs, so page views cannot move "since the last successful run"', async () => {
+    t.sqlite.prepare("INSERT INTO job_runs (started_at, finished_at, ok, summary) VALUES ('2026-01-14T14:00:00.000Z', '2026-01-14T14:00:05.000Z', 1, '{}')").run();
+    const before = t.sqlite.prepare('SELECT * FROM job_runs').all();
+    for (const token of [tok.owner, tok.staff, tok.leader, tok.manager]) expect((await call(me, '/api/me', token)).status).toBe(200);
+    expect(t.sqlite.prepare('SELECT * FROM job_runs').all()).toEqual(before);
+  });
+});
+
 describe('GET /api/me privacy contract', () => {
   it('never sends student email; staff get the leader list without any link or token', async () => {
     const owner = (await (await call(me, '/api/me', tok.owner)).json()) as Record<string, any>;
     const text = JSON.stringify(owner);
     expect(text).not.toMatch(/email|@example\.com/);
     expect(text).not.toMatch(/\/l\/|token/i);
-    const items = [...owner.behind, ...owner.admin.staleUnassigned, ...owner.admin.byLeader.flatMap((g: any) => g.items)];
+    const items = [...owner.behind, ...owner.admin.unassigned, ...owner.admin.byLeader.flatMap((g: any) => g.items)];
     expect(items.length).toBeGreaterThan(0);
     for (const i of items) expect(Object.keys(i.individual).sort()).toEqual(['name', 'phone']);
     expect(owner.admin.leaders.map((l: any) => Object.keys(l).sort())[0]).toEqual(

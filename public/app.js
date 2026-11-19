@@ -289,15 +289,16 @@
     };
     if (mockPrelaunch) return me; // the server sends no sample data to non-staff before launch
     if (admin) {
-      var stale = [
+      var unassigned = [
         mockItem('e10', 'q1', 'Connect Card Coordinators', 'NOT_STARTED', '2026-11-02', 15, 'Jules Nobody', '405-555-0110', { hoursWaiting: 360 }),
         mockItem('e11', 'q1', 'Connect Card Coordinators', 'NOT_STARTED', '2026-11-09', 8, 'Indigo Testperson', null, { hoursWaiting: 60 }),
         mockItem('e12', 'q2', 'Staff', 'NOT_STARTED', '2026-11-16', 1, 'Corey Sampleton', '405-555-0112', { hoursWaiting: 26 }),
+        mockItem('e13', 'q1', 'Connect Card Coordinators', 'NOT_STARTED', null, null, 'Robin Notreal', '405-555-0113', { hoursWaiting: 0 }),
       ];
       me.admin = {
-        staleUnassigned: stale,
+        unassigned: unassigned,
         byLeader: [
-          { leader: null, notificationsOn: false, items: stale },
+          { leader: null, notificationsOn: false, items: unassigned },
           { leader: { name: 'Sam Fakename' }, notificationsOn: true, items: items.slice(0, 2) },
           { leader: { name: 'Devon Mockford' }, notificationsOn: false, items: [mockItem('e20', 'q5', 'Service Team', 'WAITING', '2026-11-12', 5, 'Ash Fictional', '405-555-0120')] },
         ],
@@ -1114,7 +1115,7 @@
     var a = S.me.admin;
     var tabs = [
       { id: 'mine', label: 'Mine', n: S.me.behind.length },
-      { id: 'unassigned', label: 'Unassigned', n: a.staleUnassigned.length },
+      { id: 'unassigned', label: 'Unassigned', n: a.unassigned.length },
       { id: 'behind', label: 'Behind', n: null },
       { id: 'team', label: 'Team', n: teamBadge() },
     ];
@@ -1170,9 +1171,9 @@
   }
 
   function unassignedView() {
-    var items = S.me.admin.staleUnassigned;
-    var head = h('div', { class: 'hello' }, h('h2', {}, 'Waiting for a leader'), h('p', { class: 'muted' }, 'These students have been in a queue for more than a day with nobody looking after them yet.'));
-    if (!items.length) return h('div', {}, head, emptyState('Everyone has a leader', 'Nobody has been waiting for more than a day. Nice work.'));
+    var items = S.me.admin.unassigned;
+    var head = h('div', { class: 'hello' }, h('h2', {}, 'Waiting for a leader'), h('p', { class: 'muted' }, 'These students are in a queue with nobody looking after them yet, longest wait first.'));
+    if (!items.length) return h('div', {}, head, emptyState('Everyone has a leader', 'Nobody is waiting for a leader right now. Nice work.'));
     return h('div', {}, head, h('ul', { class: 'list' }, items.map(function (i) { return personCard(i, { waiting: true }); })));
   }
 

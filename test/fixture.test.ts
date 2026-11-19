@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeNudges, isBehind } from '../src/core/behind';
+import { computeNudges, isBehind, isNewSinceLastRun, isOverdue, isPastFirstText, ownTriggered } from '../src/core/behind';
 import { loadConfig } from '../src/core/config';
 import { createFixtureSource } from '../src/chms/fixture';
 import { addDays, zonedDate } from '../src/core/time';
@@ -60,8 +60,35 @@ describe('fixture source', () => {
     expect(r.admins.map((a) => a.adminId).sort()).toEqual(['M201', 'M202']);
     const adminBehind = r.admins.flatMap((a) => a.behindByLeader.flatMap((g) => g.entries));
     expect(adminBehind).toHaveLength(expectedBehind.length); // each queue has exactly one admin
-    expect(r.admins.flatMap((a) => a.staleUnassigned).length).toBeGreaterThan(3);
+    expect(r.admins.flatMap((a) => a.unassigned).length).toBeGreaterThan(3);
     // Nothing from the parking queues leaks through.
     expect(adminBehind.some((e) => parking.has(e.queueId))).toBe(false);
+  });
+
+  it('exercises every nudge-timing case (last run 24 hours before now)', async () => {
+    const { config, queues, entries } = await load(NOW);
+    const w = { now: NOW, lastRunAt: new Date(NOW.getTime() - 24 * 3600 * 1000) };
+    const tz = config.timeZone;
+    const e = (id: string) => entries.find((x) => x.id === id)!;
+    const facts = (id: string) => ({
+      assigned: e(id).assignee !== null,
+      isNew: isNewSinceLastRun(e(id), w, tz),
+      overdue: isOverdue(e(id), NOW, config),
+      pastFirstText: isPastFirstText(e(id), NOW, config),
+    });
+    expect(facts('E5035')).toMatchObject({ assigned: true, isNew: true, overdue: false }); // new assigned
+    expect(facts('E5024')).toMatchObject({ assigned: true, isNew: false, overdue: false }); // grace week (3 days, no due date)
+    expect(facts('E5012')).toMatchObject({ assigned: true, isNew: false, overdue: true }); // overdue by age (8 days, no due date)
+    expect(e('E5012').due).toBeNull();
+    expect(facts('E5016')).toMatchObject({ assigned: true, overdue: true }); // overdue by due date
+    expect(e('E5016').due).not.toBeNull();
+    expect(facts('E5033')).toMatchObject({ assigned: false, isNew: true, pastFirstText: false }); // new unassigned
+    expect(facts('E5030')).toMatchObject({ assigned: false, isNew: false, pastFirstText: false }); // 2 days unassigned: quiet
+    expect(facts('E5036')).toMatchObject({ assigned: false, isNew: false, pastFirstText: true }); // 4 days unassigned
+    // A leader with a student waiting but nothing new or overdue: counted in the app, no push.
+    const r = computeNudges(queues, entries, config, NOW);
+    const quiet = r.leaders.find((l) => l.leader.id === 'L108')!;
+    expect(quiet.behind.length).toBeGreaterThan(0);
+    expect(ownTriggered(quiet.behind, w, config)).toBe(false);
   });
 });
