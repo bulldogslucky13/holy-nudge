@@ -239,7 +239,9 @@
   ];
 
   // Lead people nobody with a link is matched to yet (made up). Near-misses on purpose: an exact name would
-  // already have been matched by the server.
+  // already have been matched by the server. For Jordan Notreal (17): one likely match (the fuller legal name),
+  // a sibling (same surname) and two other Jordans. For Taylor Testwell (18): two strong candidates, so neither
+  // is tagged likely.
   var mockLeadPeople = [
     { id: 'P301', name: 'Blair Imaginary' },
     { id: 'P302', name: 'Casey Notreal' },
@@ -247,6 +249,26 @@
     { id: 'P304', name: 'Morgan Fakerson' },
     { id: 'P305', name: 'Robin Pretendly' },
     { id: 'P306', name: 'Taylor Testwell-Mock' },
+    { id: 'P307', name: 'Jordan Avery Notreal' },
+    { id: 'P308', name: 'Jordan Fakesmith' },
+    { id: 'P309', name: 'Tay Testwell' },
+    { id: 'P310', name: 'Alexandra Mockley' },
+    { id: 'P311', name: 'William Sampleby' },
+    { id: 'P312', name: 'Katherine Inventa' },
+    { id: 'P313', name: 'Zachary Unrealton' },
+    { id: 'P314', name: 'Madeline Dummer' },
+    { id: 'P315', name: 'Nathaniel Fauxley' },
+    { id: 'P316', name: 'Rebecca Phantomly' },
+    { id: 'P317', name: 'Gabriel Notatall' },
+    { id: 'P318', name: 'Élodie Fictif' },
+    { id: 'P319', name: 'Christopher Madeupson' },
+    { id: 'P320', name: 'Abigail Pseudonym' },
+    { id: 'P321', name: 'Sam Fakerson-Lee' },
+    { id: 'P322', name: 'Drew Hypothetic' },
+    { id: 'P323', name: 'Margaret Placeholderly' },
+    { id: 'P324', name: 'Joshua Testerton' },
+    { id: 'P325', name: 'Eleanor Mockingham' },
+    { id: 'P326', name: 'Benjamin Nobodyson' },
   ];
 
   var mockAdded = []; // people "added" in a mock session (so a repeat name answers name_taken)
@@ -505,6 +527,7 @@
     addOpen: false, // add form is tucked behind an "Add a leader" button until tapped
     matchOpen: null, // id of the leader whose Lead chooser is open (staff)
     matchChoice: '', // the Lead person picked in that chooser (survives a re-render)
+    matchQuery: null, // what is typed in the chooser's search (null: not opened yet, starts as the leader's first name)
     matchNote: {}, // leader id -> short note after a match change ("Matched to ...")
   };
   if (mock) {
@@ -1488,32 +1511,20 @@
   function openMatch(l) {
     S.matchOpen = l.id;
     S.matchChoice = '';
+    S.matchQuery = null;
     delete S.matchNote[l.id];
     renderInPlace();
-    var el = document.getElementById('match-select-' + l.id);
+    // On a phone, keep the keyboard down so the suggestions stay in view; elsewhere start in the search box.
+    var touch = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    var el = document.getElementById((touch ? 'match-panel-' : 'match-search-') + l.id);
     if (el) el.focus();
   }
 
   function closeMatch() {
     S.matchOpen = null;
     S.matchChoice = '';
+    S.matchQuery = null;
     renderInPlace();
-  }
-
-  function nameWords(name) {
-    return String(name || '').toLowerCase().split(/[\s\-]+/).filter(function (w) { return w.length > 1; });
-  }
-
-  /* Lead people whose name shares a word with this leader's name come first, as likely matches. */
-  function likelyFirst(l, people) {
-    var mine = nameWords(l.name);
-    var likely = [];
-    var rest = [];
-    people.forEach(function (p) {
-      var shared = nameWords(p.name).some(function (w) { return mine.indexOf(w) !== -1; });
-      (shared ? likely : rest).push(p);
-    });
-    return { likely: likely, rest: rest };
   }
 
   function matchErrorWords(e) {
@@ -1546,6 +1557,7 @@
         S.matchNote[l.id] = chmsId === null ? 'Match cleared. Their link still works.' : 'Matched to ' + personName + ' in Lead.';
         S.matchOpen = null;
         S.matchChoice = '';
+        S.matchQuery = null;
         renderInPlace();
         refreshInPlace();
       })
@@ -1560,9 +1572,12 @@
       });
   }
 
-  /* The chooser: pick who this leader is in Lead (likely names first), then confirm. Clear sits here too. */
+  /* The chooser: pick who this leader is in Lead, then confirm. Clear sits here too.
+     Up to 3 suggestions by name (public/name-match.js) sit at the top; one clear front-runner is tagged
+     "Likely match", but nothing is ever preselected. Below, everyone else, filtered as staff type. */
   function matchPanel(l) {
     var people = Array.isArray(S.me.admin.leadPeople) ? S.me.admin.leadPeople : [];
+    var NM = window.NameMatch;
     var statusEl = h('p', { class: 'status-line small', role: 'status' });
     var cancelBtn = h('button', { class: 'btn small-btn link', type: 'button', onclick: closeMatch }, 'Cancel');
     var clearBtn = null;
@@ -1575,41 +1590,151 @@
     }
     var head = h('p', { class: 'small' }, l.matched ? 'Match ' + firstName(l.name) + ' to someone else in Lead, or clear the match.' : 'Who is ' + l.name + ' in Lead? Once real data is connected, they’ll see the students assigned to that person.');
     var sampleNote = S.me.live === false ? h('p', { class: 'muted small' }, 'You’re seeing sample data, so these are made-up people.') : null;
+    var panelProps = { class: 'match-panel', id: 'match-panel-' + l.id, tabindex: '-1' };
 
-    if (!people.length) {
+    if (!people.length || !NM) {
       return h(
         'div',
-        { class: 'match-panel' },
+        panelProps,
         head,
         sampleNote,
-        h('p', { class: 'muted small' }, 'Nobody in Lead is free to match right now. People show up here once they have a student assigned or manage a queue.'),
+        h('p', { class: 'muted small' }, !NM ? 'The list of people didn’t load. Reload the page and try again.' : 'Nobody in Lead is free to match right now. People show up here once they have a student assigned or manage a queue.'),
         h('div', { class: 'btns' }, clearBtn, cancelBtn),
         statusEl
       );
     }
 
-    var groups = likelyFirst(l, people);
-    var option = function (p) { return h('option', { value: p.id, selected: S.matchChoice === p.id }, p.name); };
-    var select = h(
-      'select',
-      { class: 'text-input select-input', id: 'match-select-' + l.id, name: 'lead-person' },
-      h('option', { value: '' }, 'Choose a person…'),
-      groups.likely.length ? h('optgroup', { label: 'Similar names' }, groups.likely.map(option)) : null,
-      groups.rest.length ? (groups.likely.length ? h('optgroup', { label: 'Everyone else' }, groups.rest.map(option)) : groups.rest.map(option)) : null
-    );
-    select.addEventListener('change', function () { S.matchChoice = select.value; });
+    if (S.matchQuery === null) S.matchQuery = String(l.name || '').trim().split(/\s+/)[0] || '';
+    if (!people.some(function (p) { return p.id === S.matchChoice; })) S.matchChoice = '';
+
+    var ranked = NM.rankPeople(l.name, people); // best first, ties by name
+    var suggested = ranked.filter(function (p) { return p.score >= NM.SUGGEST_MIN; }).slice(0, 3);
+    var others = ranked.filter(function (p) { return suggested.indexOf(p) === -1; }); // each person shows once
+    var radioName = 'lead-person-' + l.id;
     var saveBtn = h('button', { class: 'btn small-btn primary', type: 'submit' }, l.matched ? 'Change match' : 'Match');
+    var chosenEl = h('p', { class: 'small chosen-line', 'aria-live': 'polite' });
+
+    function showChoice() {
+      var chosen = people.filter(function (p) { return p.id === S.matchChoice; })[0];
+      saveBtn.disabled = !chosen;
+      chosenEl.textContent = chosen ? 'Chosen: ' + chosen.name : '';
+    }
+
+    function personRow(p) {
+      var radio = h('input', { type: 'radio', name: radioName, value: p.id, checked: S.matchChoice === p.id });
+      radio.addEventListener('change', function () {
+        if (!radio.checked) return;
+        S.matchChoice = p.id;
+        statusEl.className = 'status-line small';
+        statusEl.textContent = '';
+        showChoice();
+      });
+      return h(
+        'label',
+        { class: 'person-option' },
+        radio,
+        h('span', { class: 'person-name' }, p.name),
+        p.likely ? h('span', { class: 'likely-tag' }, 'Likely match') : null
+      );
+    }
+
+    var suggestBox = suggested.length
+      ? h(
+          'fieldset',
+          { class: 'person-set' },
+          h('legend', { class: 'field-label' }, 'Suggested'),
+          h('div', { class: 'person-list' }, suggested.map(personRow))
+        )
+      : null;
+
+    var searchId = 'match-search-' + l.id;
+    var listId = 'match-results-' + l.id;
+    var search = h('input', {
+      class: 'text-input',
+      id: searchId,
+      name: 'lead-search',
+      type: 'search',
+      maxlength: '80',
+      autocapitalize: 'words',
+      autocomplete: 'off',
+      autocorrect: 'off',
+      spellcheck: 'false',
+      enterkeyhint: 'search',
+      'aria-controls': listId,
+    });
+    search.value = S.matchQuery;
+    var countEl = h('p', { class: 'muted small', role: 'status' });
+    var listEl = h('div', { class: 'person-list scroll', id: listId });
+
+    // Typing refills only the list below, so the search box keeps focus and the caret.
+    function fillResults() {
+      var q = S.matchQuery;
+      var hits = [];
+      others.forEach(function (p) {
+        var fit = NM.matchQuery(q, p.name);
+        if (fit > 0) hits.push({ p: p, fit: fit });
+      });
+      hits.sort(function (a, b) { return b.fit - a.fit; }); // stable: equal fits keep the best-guess order
+      while (listEl.firstChild) listEl.removeChild(listEl.firstChild);
+      var typed = /\S/.test(q);
+      if (hits.length) {
+        countEl.textContent = typed
+          ? hits.length + ' ' + plural(hits.length, 'match', 'matches')
+          : (suggested.length ? 'Everyone else in Lead (' : 'Everyone in Lead (') + hits.length + ')';
+        append(listEl, hits.map(function (x) { return personRow(x.p); }));
+        return;
+      }
+      countEl.textContent = '';
+      if (!typed) {
+        append(listEl, h('p', { class: 'muted small empty-line' }, 'No one else in Lead right now.'));
+        return;
+      }
+      var inSuggested = suggested.some(function (p) { return NM.matchQuery(q, p.name) > 0; });
+      var clearSearch = h('button', { class: 'btn small-btn link', type: 'button', onclick: function () {
+        search.value = '';
+        S.matchQuery = '';
+        fillResults();
+        search.focus();
+      } }, 'Clear search');
+      append(
+        listEl,
+        h(
+          'div',
+          { class: 'empty-line' },
+          h('p', { class: 'muted small' }, inSuggested ? 'No one else by that name in Lead. Clear the search to see everyone.' : 'No one by that name in Lead. Clear the search to see everyone.'),
+          clearSearch
+        )
+      );
+    }
+
+    search.addEventListener('input', function () {
+      S.matchQuery = search.value;
+      fillResults();
+    });
+    search.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') ev.preventDefault(); // Enter here never confirms a match
+    });
+
     var form = h(
       'form',
       { class: 'match-form', novalidate: true },
-      h('label', { class: 'field-label', for: 'match-select-' + l.id }, 'Person in Lead'),
-      select,
+      suggestBox,
+      h('label', { class: 'field-label', for: searchId }, 'Search people in Lead'),
+      search,
+      h(
+        'fieldset',
+        { class: 'person-set' },
+        h('legend', { class: 'sr-only' }, suggested.length ? 'Everyone else in Lead' : 'People in Lead'),
+        countEl,
+        listEl
+      ),
+      chosenEl,
       h('div', { class: 'btns' }, saveBtn, clearBtn, cancelBtn),
       statusEl
     );
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
-      var chosen = people.filter(function (p) { return p.id === select.value; })[0];
+      var chosen = people.filter(function (p) { return p.id === S.matchChoice; })[0];
       if (!chosen) {
         statusEl.className = 'status-line small err';
         statusEl.textContent = 'Choose who they are in Lead first.';
@@ -1618,7 +1743,9 @@
       if (!window.confirm('Match ' + l.name + ' to ' + chosen.name + ' in Lead? They’ll see the students assigned to ' + chosen.name + '.')) return;
       sendMatch(l, chosen.id, chosen.name, saveBtn, statusEl);
     });
-    return h('div', { class: 'match-panel' }, head, sampleNote, form);
+    fillResults();
+    showChoice();
+    return h('div', panelProps, head, sampleNote, form);
   }
 
   function leaderRow(l) {
