@@ -1,12 +1,12 @@
 // Builds the GET /api/me response (docs/ARCHITECTURE.md "JSON contract").
-import { computeNudges, type AdminResult } from '../core/behind';
+import { computeNudges, queueIdsForKeys, type AdminResult } from '../core/behind';
 import { availableLeadPeople } from '../core/match';
 import { adminQueueUrl, isLive, queueUrl } from '../core/config';
 import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from '../core/time';
 import type { HolyNudgeConfig, Queue, QueueEntry, Status } from '../core/types';
 import { errorClassName } from '../core/errors';
 import type { LeaderRow, Store } from '../db';
-import { globalAdminView, peopleSeen, syncLeaders, type Snapshot } from '../job/load';
+import { coordinatorScopes, globalAdminView, peopleSeen, syncLeaders, type Snapshot } from '../job/load';
 
 export interface ItemJson {
   entryId: string;
@@ -39,6 +39,11 @@ export interface LeaderAdminJson {
   isYou: boolean;
   /** Tied to a Lead (ChMS) person, so once live they see that person's students. The id itself is not sent. */
   matched: boolean;
+  /**
+   * Names of the (non-excluded) queues this row coordinates, i.e. the whole queues they see, in queue order.
+   * Keys that match no queue in the current data are left out: they grant nothing. Read-only.
+   */
+  coordinates: string[];
 }
 
 /** A Lead person staff may match a leader to (seen in Lead data, not held by another row in use). */
@@ -60,7 +65,7 @@ export interface MeJson {
     unassigned: UnassignedItemJson[];
     byLeader: { leader: { name: string } | null; notificationsOn: boolean; items: ItemJson[] }[];
     leadersWithoutNotifications: { name: string }[];
-    /** Staff only (leaders flagged is_admin). Implicit queue admins never get this key. */
+    /** Staff only (leaders flagged is_admin). Coordinators never get this key. */
     leaders?: LeaderAdminJson[];
     /** Staff only, with `leaders`: who a leader can be matched to (POST /api/leader-match). */
     leadPeople?: LeadPersonJson[];
@@ -83,7 +88,8 @@ export function canManageLink(actor: Pick<LeaderRow, 'isAdmin' | 'isOwner'>, tar
   return actor.isAdmin && (!target.isOwner || actor.isOwner);
 }
 
-export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow): LeaderAdminJson {
+export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow, queues: readonly Queue[] = []): LeaderAdminJson {
+  const names = new Map(queues.map((q) => [q.id, q.name]));
   return {
     id: l.id,
     name: l.name,
@@ -94,6 +100,7 @@ export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow): LeaderAdminJso
     canManage: canManageLink(viewer, l),
     isYou: l.id === viewer.id,
     matched: l.chmsIndividualId !== null,
+    coordinates: queueIdsForKeys(queues, l.coordinatorOf).map((id) => names.get(id)!),
   };
 }
 
@@ -106,11 +113,19 @@ export interface BuildMeInput {
   now: Date;
 }
 
-/** True if this leader gets the admin view (flagged admin, or admin of some queue). */
+/**
+ * The coordinator view for this leader row: the non-excluded queues its queue_coordinators keys name, or
+ * undefined when they name none. Attached to the row, not to a Lead id, so it works before matching.
+ * Being a Lead queue manager counts for nothing here.
+ */
+export function coordinatorView(leader: LeaderRow, config: HolyNudgeConfig, snapshot: Snapshot, now: Date): AdminResult | undefined {
+  if (leader.coordinatorOf.length === 0) return undefined;
+  return computeNudges(snapshot.queues, snapshot.entries, config, now, coordinatorScopes([leader])).coordinators[0];
+}
+
+/** True if this leader gets a whole-queue view: staff (is_admin), or a coordinator of some current queue. */
 export function isAdminFor(leader: LeaderRow, config: HolyNudgeConfig, snapshot: Snapshot, now: Date): boolean {
-  if (leader.isAdmin) return true;
-  if (!leader.chmsIndividualId) return false;
-  return computeNudges(snapshot.queues, snapshot.entries, config, now).admins.some((a) => a.adminId === leader.chmsIndividualId);
+  return leader.isAdmin || coordinatorView(leader, config, snapshot, now) !== undefined;
 }
 
 /**
@@ -158,9 +173,7 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
   const nudges = computeNudges(snapshot.queues, snapshot.entries, config, now);
   const mine = leader.chmsIndividualId ? nudges.leaders.find((l) => l.leader.id === leader.chmsIndividualId) : undefined;
 
-  let adminView: AdminResult | undefined;
-  if (leader.isAdmin) adminView = globalAdminView(snapshot, config, now);
-  else if (leader.chmsIndividualId) adminView = nudges.admins.find((a) => a.adminId === leader.chmsIndividualId);
+  const adminView: AdminResult | undefined = leader.isAdmin ? globalAdminView(snapshot, config, now) : coordinatorView(leader, config, snapshot, now);
 
   const out: MeJson = {
     leader: { name: leader.name, isAdmin: adminView !== undefined, notificationsOn: leader.subscriptionCount > 0 },
@@ -194,9 +207,9 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
         .map(([, name]) => ({ name }))
         .sort(byName),
     };
-    // Link management is for staff (is_admin) only, never for implicit queue-manager admins.
+    // Link management is for staff (is_admin) only, never for coordinators.
     if (leader.isAdmin) {
-      out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader)).sort(byName);
+      out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader, snapshot.queues)).sort(byName);
       out.admin.leadPeople = availableLeadPeople(leaders, peopleSeen(snapshot));
     }
   }
@@ -237,7 +250,7 @@ export async function resolveMe({ store, config, leader, now, loadSnapshot }: Re
     // built from the stale, unmatched one and show nothing until the next request.
     leader = leaders.find((l) => l.id === leader.id) ?? leader;
   } else if (isAdminFor(leader, config, snapshot, now)) {
-    // Queue-manager admins see notification status for their leaders; no link features.
+    // Coordinators see notification status for the leaders in their queues; no link features.
     leaders = await store.listLeaders();
   }
   return { ok: true, me: buildMe({ config, snapshot, leader, leaders, now }) };

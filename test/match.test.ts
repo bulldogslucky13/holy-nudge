@@ -17,7 +17,7 @@ import { FakeSender } from './fakes';
 import { config, entry, person, queue } from './helpers';
 import { createTestD1, type TestD1 } from './sqlite-d1';
 
-const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql'];
+const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql', 'migrations/0005_queue_coordinators.sql'];
 const HOST = 'https://holynudge.cameronbristol.xyz';
 
 let t: TestD1;
@@ -31,17 +31,21 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 /** Insert a row directly; returns its id. `token` gives it a working link (hash stored). */
-async function insert(r: { name: string; chms?: string | null; token?: string | null; admin?: boolean; owner?: boolean; lastSeen?: string; revoked?: string; byHand?: boolean; devices?: number }): Promise<number> {
+async function insert(r: { name: string; chms?: string | null; token?: string | null; admin?: boolean; owner?: boolean; lastSeen?: string; revoked?: string; byHand?: boolean; devices?: number; coordinates?: string[] }): Promise<number> {
   const res = t.sqlite
     .prepare('INSERT INTO leaders (chms_individual_id, name, token_hash, is_admin, is_owner, last_seen_at, revoked_at, match_by_hand) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id')
     .get(r.chms ?? null, r.name, r.token ? await hashToken(r.token) : null, r.admin ? 1 : 0, r.owner ? 1 : 0, r.lastSeen ?? null, r.revoked ?? null, r.byHand ? 1 : 0) as { id: number };
   for (let i = 0; i < (r.devices ?? 0); i++) {
     t.sqlite.prepare("INSERT INTO push_subscriptions (leader_id, endpoint, p256dh, auth) VALUES (?, ?, 'k', 'a')").run(res.id, `https://web.push.apple.com/${res.id}/${i}`);
   }
+  for (const k of r.coordinates ?? []) t.sqlite.prepare('INSERT INTO queue_coordinators (leader_id, queue_key) VALUES (?, ?)').run(res.id, k);
   return res.id;
 }
 const rows = () => t.sqlite.prepare('SELECT id, chms_individual_id AS chms, name, token_hash, is_admin, is_owner, last_seen_at, revoked_at, match_by_hand FROM leaders ORDER BY id').all() as Record<string, unknown>[];
 const rowById = (id: number) => rows().find((r) => r.id === id);
+/** Every coordinator row, as [leader id, key], sorted: shows exactly whose they are. */
+const coordinatorRows = () =>
+  (t.sqlite.prepare('SELECT leader_id, queue_key FROM queue_coordinators ORDER BY leader_id, queue_key').all() as { leader_id: number; queue_key: string }[]).map((c) => [c.leader_id, c.queue_key]);
 const subsOf = (id: number) => (t.sqlite.prepare('SELECT endpoint FROM push_subscriptions WHERE leader_id = ? ORDER BY endpoint').all(id) as { endpoint: string }[]).map((s) => s.endpoint);
 
 describe('normalizeName', () => {
@@ -178,6 +182,74 @@ describe('automatic matching (syncLeaders)', () => {
   });
 });
 
+describe('coordinator rows through merges', () => {
+  it('an automatic merge moves the spare row\'s coordinator rows to the surviving row (union, no duplicates, no orphans)', async () => {
+    const r = await insert({ name: 'Pat Fakerly', token: 'pat-coord-token-ooooooooooooooooooooooo', coordinates: ['Outreach Team', 'Service Team'] });
+    const spare = await insert({ name: 'Pat Fakerly', chms: 'P1', coordinates: ['Service Team', '4'] });
+    const other = await insert({ name: 'Other Personsen', chms: 'P2', coordinates: ['Staff'] });
+    expect(await syncLeaders(store, [{ id: 'P1', name: 'Pat Fakerly' }, { id: 'P2', name: 'Other Personsen' }])).toBe(1);
+    expect(rowById(spare)).toBeUndefined();
+    expect(coordinatorRows()).toEqual([[r, '4'], [r, 'Outreach Team'], [r, 'Service Team'], [other, 'Staff']]);
+    expect((await store.leaderById(r))?.coordinatorOf).toEqual(['4', 'Outreach Team', 'Service Team']);
+    expect(t.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it('a staff row that is also a coordinator keeps its mark through a merge and takes the spare row\'s too', async () => {
+    const staff = await insert({ name: 'Quinn Stafford', token: 'quinn-coord-token-wwwwwwwwwwwwwwwwwwww', admin: true, coordinates: ['Staff'] });
+    await insert({ name: 'Quinn Stafford', chms: 'P4', coordinates: ['Service Team'] });
+    expect(await syncLeaders(store, [{ id: 'P4', name: 'Quinn Stafford' }])).toBe(1);
+    expect(await store.leaderById(staff)).toMatchObject({ isAdmin: true, chmsIndividualId: 'P4', coordinatorOf: ['Service Team', 'Staff'] });
+    expect(coordinatorRows()).toEqual([[staff, 'Service Team'], [staff, 'Staff']]);
+  });
+
+  it('a merge that is skipped (re-checked in SQL) copies nothing: rows never land on a different row', async () => {
+    const r = await insert({ name: 'Ren Racer', token: 'ren-coord-token-ppppppppppppppppppppppp' });
+    const spare = await insert({ name: 'Ren Racer', chms: 'P1', coordinates: ['Service Team'] });
+    const plan = planMatches((await store.listLeaders()) as MatchRow[], [{ id: 'P1', name: 'Ren Racer' }]);
+    t.sqlite.prepare('UPDATE leaders SET is_admin = 1 WHERE id = ?').run(spare); // no longer a spare
+    expect(await store.applyMatches(plan)).toBe(0);
+    expect(coordinatorRows()).toEqual([[spare, 'Service Team']]);
+    expect(rowById(r)!.chms).toBeNull();
+  });
+
+  it('does not rely on ON DELETE CASCADE: with foreign keys off, the merge still leaves no orphan rows', async () => {
+    t.sqlite.exec('PRAGMA foreign_keys = OFF');
+    const r = await insert({ name: 'Pat Fakerly', token: 'pat-nofk-token-qqqqqqqqqqqqqqqqqqqqqqqq' });
+    const spare = await insert({ name: 'Pat Fakerly', chms: 'P1', coordinates: ['Service Team'] });
+    expect(await syncLeaders(store, [{ id: 'P1', name: 'Pat Fakerly' }])).toBe(1);
+    expect(rowById(spare)).toBeUndefined();
+    expect(coordinatorRows()).toEqual([[r, 'Service Team']]);
+  });
+
+  it('a match by hand moves the spare row\'s rows to the row with the link; changing or clearing the match keeps the row\'s own', async () => {
+    const staff = await insert({ name: 'Staff Person', token: 'staff-coord-token-rrrrrrrrrrrrrrrrrrrrr', admin: true });
+    const newbie = await insert({ name: 'Newbie Byname', token: 'newbie-coord-token-sssssssssssssssssss', coordinates: ['Outreach Team'] });
+    const s1 = await insert({ name: 'Cordelia Fitch', chms: 'L103', coordinates: ['Service Team'] });
+    const s2 = await insert({ name: 'Esme Calder', chms: 'L105', coordinates: ['Staff'] });
+    const actor = (await store.leaderById(staff))!;
+    const { matchLeader } = await import('../src/api/leaders');
+    expect(await matchLeader(store, actor, newbie, 'L103')).toEqual({ ok: true, matched: true });
+    expect(coordinatorRows()).toEqual([[newbie, 'Outreach Team'], [newbie, 'Service Team'], [s2, 'Staff']]);
+    expect(rowById(s1)).toBeUndefined();
+    // Changing the match takes over the next person's spare row (and its rows): still the person holding the link.
+    expect(await matchLeader(store, actor, newbie, 'L105')).toEqual({ ok: true, matched: true });
+    expect(coordinatorRows()).toEqual([[newbie, 'Outreach Team'], [newbie, 'Service Team'], [newbie, 'Staff']]);
+    // Clearing the match: scope belongs to the row, not to the Lead id, so it stays.
+    expect(await matchLeader(store, actor, newbie, null)).toEqual({ ok: true, matched: false });
+    expect((await store.leaderById(newbie))?.coordinatorOf).toEqual(['Outreach Team', 'Service Team', 'Staff']);
+    expect(t.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it('a refused match by hand (person held by a row in use) moves nothing', async () => {
+    const staff = await insert({ name: 'Staff Person', token: 'staff-coord-token-ttttttttttttttttttttt', admin: true });
+    const newbie = await insert({ name: 'Newbie Byname', token: 'newbie-coord-token-uuuuuuuuuuuuuuuuuuu' });
+    const held = await insert({ name: 'Plain Leader', chms: 'L101', token: 'held-coord-token-vvvvvvvvvvvvvvvvvvvvvv', coordinates: ['Service Team'] });
+    const { matchLeader } = await import('../src/api/leaders');
+    expect(await matchLeader(store, (await store.leaderById(staff))!, newbie, 'L101')).toEqual({ error: 'person_taken' });
+    expect(coordinatorRows()).toEqual([[held, 'Service Team']]);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------- endpoint
 
 const tok = {
@@ -204,7 +276,7 @@ describe('POST /api/leader-match', () => {
       owner: await insert({ name: 'Owner Person', token: tok.owner, admin: true, owner: true }),
       staff: await insert({ name: 'Staff Person', token: tok.staff, admin: true }),
       leader: await insert({ name: 'Plain Leader', chms: 'L101', token: tok.leader }),
-      manager: await insert({ name: 'Queue Manager', chms: 'M201', token: tok.manager }),
+      manager: await insert({ name: 'Queue Manager', chms: 'M201', token: tok.manager, coordinates: ['Connect Card Coordinators'] }),
       newbie: await insert({ name: 'Newbie Byname', token: tok.newbie, devices: 1, lastSeen: '2026-11-18T14:00:00.000Z' }),
       spareL103: await insert({ name: 'Cordelia Fitch', chms: 'L103' }),
       spareL105: await insert({ name: 'Esme Calder', chms: 'L105' }),
@@ -273,7 +345,7 @@ describe('POST /api/leader-match', () => {
     expect(rows()).toEqual(before);
   });
 
-  it('is staff only: plain leaders and queue-manager admins get 403, no token 401, nothing changes', async () => {
+  it('is staff only: plain leaders and coordinators get 403, no token 401, nothing changes', async () => {
     const before = rows();
     for (const who of [tok.leader, tok.manager, tok.newbie]) {
       for (const chmsId of ['L103', null]) {

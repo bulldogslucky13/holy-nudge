@@ -42,8 +42,10 @@ function source(over: Partial<DataSource> = {}): DataSource {
 function setup() {
   const store = new FakeStore();
   const lee1 = store.addLeader({ chmsIndividualId: 'L1', name: 'Lee' }, 2);
-  const mara = store.addLeader({ chmsIndividualId: 'M1', name: 'Mara' }, 1);
-  const milo = store.addLeader({ chmsIndividualId: 'M2', name: 'Milo' }, 1);
+  // Mara and Milo manage q1 and q2 in Lead AND are marked as their coordinators (Mara by exact queue name,
+  // Milo by queue id). Being a Lead manager alone grants nothing (see 'coordinators' below).
+  const mara = store.addLeader({ chmsIndividualId: 'M1', name: 'Mara', coordinatorOf: ['Outreach'] }, 1);
+  const milo = store.addLeader({ chmsIndividualId: 'M2', name: 'Milo', coordinatorOf: ['q2'] }, 1);
   const owner = store.addLeader({ name: 'Owner', isAdmin: true, isOwner: true }, 1);
   const sender = new FakeSender([`https://push.example/${lee1}/1`]);
   return { store, sender, ids: { lee1, mara, milo, owner } };
@@ -53,7 +55,7 @@ const bodiesFor = (sender: FakeSender, leaderId: number) =>
   sender.sent.filter((s) => s.endpoint.startsWith(`https://push.example/${leaderId}/`)).map((s) => s.payload);
 
 describe('daily job', () => {
-  it('sends one nudge per behind leader and one summary per admin, counts only', async () => {
+  it('sends one nudge per behind leader and one summary per coordinator and staff member, counts only', async () => {
     const { store, sender, ids } = setup();
     const out = await runDailyJob({ config: cfg, store, sender, dataSource: () => source(), now: NOW });
     expect(out.ran).toBe(true);
@@ -89,6 +91,54 @@ describe('daily job', () => {
       subscriptionsRemoved: 1,
     });
     expect(JSON.stringify(store.runs[0]!.summary)).not.toMatch(/Lee|Liv|Mara/);
+  });
+
+  describe('coordinators (whole-queue summaries)', () => {
+    it('a Lead queue manager who is not marked as coordinator gets no summary push', async () => {
+      const { store, sender, ids } = setup();
+      for (const l of store.leaders) l.coordinatorOf = [];
+      const out = await runDailyJob({ config: cfg, store, sender, dataSource: () => source(), now: NOW });
+      expect(bodiesFor(sender, ids.mara)).toEqual([]);
+      expect(bodiesFor(sender, ids.milo)).toEqual([]);
+      // Staff are unchanged; the assignee still gets their own nudge.
+      expect(bodiesFor(sender, ids.owner).map((p) => p.title)).toEqual(['4 students waiting']);
+      expect(bodiesFor(sender, ids.lee1).map((p) => p.kind)).toEqual(['leader']);
+      expect(out.ran && out.summary).toMatchObject({ adminsNudged: 1 });
+    });
+
+    it('scope attaches to the leader row: a coordinator not matched to Lead gets their queue\'s summary, and only theirs', async () => {
+      const { store, sender } = setup();
+      const cleo = store.addLeader({ name: 'Cleo Byname', coordinatorOf: ['q1'] }, 1);
+      const wren = store.addLeader({ name: 'Wren Byname', coordinatorOf: ['Staff'] }, 1);
+      await runDailyJob({ config: cfg, store, sender, dataSource: () => source(), now: NOW });
+      expect(bodiesFor(sender, cleo).map((p) => `${p.title} | ${p.body}`)).toEqual(['3 students waiting | Across 1 leader, 1 unassigned']);
+      expect(bodiesFor(sender, wren).map((p) => `${p.title} | ${p.body}`)).toEqual(['1 student waiting | Across 1 leader']);
+    });
+
+    it('staff who are also marked coordinators: staff wins, one push with the whole-process counts, never narrowed', async () => {
+      const { store, sender, ids } = setup();
+      store.leaders.find((l) => l.id === ids.owner)!.coordinatorOf = ['Staff'];
+      const out = await runDailyJob({ config: cfg, store, sender, dataSource: () => source(), now: NOW });
+      expect(bodiesFor(sender, ids.owner)).toEqual([{ title: '4 students waiting', body: 'Across 2 leaders, 1 unassigned', kind: 'admin', count: 4 }]);
+      expect(out.ran && out.summary).toMatchObject({ adminsNudged: 3 });
+
+      // With their own students too: one combined push, worded "across all queues".
+      const s2 = setup();
+      const staffRow = s2.store.leaders.find((l) => l.id === s2.ids.owner)!;
+      staffRow.coordinatorOf = ['Staff'];
+      staffRow.chmsIndividualId = 'L2'; // Liv's students (q2) are now the owner's own
+      await runDailyJob({ config: cfg, store: s2.store, sender: s2.sender, dataSource: () => source(), now: NOW });
+      expect(bodiesFor(s2.sender, s2.ids.owner)).toEqual([{ title: '1 student is waiting on you', body: '4 waiting across all queues, 1 unassigned', kind: 'leader', count: 1 }]);
+    });
+
+    it('keys that match no queue, or only an excluded one, grant nothing', async () => {
+      const { store, sender } = setup();
+      const a = store.addLeader({ name: 'Ash Typo', coordinatorOf: ['outreach', 'Outreach '] }, 1); // case and spacing count
+      const b = store.addLeader({ name: 'Bo Parked', coordinatorOf: ['Not Interested', 'qx'] }, 1);
+      await runDailyJob({ config: cfg, store, sender, dataSource: () => source(), now: NOW });
+      expect(bodiesFor(sender, a)).toEqual([]);
+      expect(bodiesFor(sender, b)).toEqual([]);
+    });
   });
 
   describe('one push per person per morning', () => {
@@ -302,7 +352,7 @@ describe('daily job', () => {
       const store = new FakeStore();
       const ids = {
         lee: store.addLeader({ chmsIndividualId: 'L1', name: 'Lee' }, 1),
-        mara: store.addLeader({ chmsIndividualId: 'M1', name: 'Mara' }, 1),
+        mara: store.addLeader({ chmsIndividualId: 'M1', name: 'Mara', coordinatorOf: ['Outreach'] }, 1), // the queue's coordinator
         owner: store.addLeader({ name: 'Owner', isAdmin: true, isOwner: true }, 1),
       };
       if (lastRun) store.addRun(lastRun, true);
@@ -320,7 +370,7 @@ describe('daily job', () => {
       return { store, sender, ids, run, pushed };
     }
 
-    it('a new assigned student: the assignee is nudged; the manager and staff are not (someone else\'s new assignment)', async () => {
+    it('a new assigned student: the assignee is nudged; the coordinator and staff are not (someone else\'s new assignment)', async () => {
       const w = world([entry({ id: 'n1', status: 'NOT_STARTED', assignee: lee, created: ago(6) })]);
       const summary = await w.run();
       expect(w.pushed()).toEqual(['lee']);
@@ -338,7 +388,7 @@ describe('daily job', () => {
       expect(summary).toMatchObject({ leadersBehind: 1, behind: 1, ownTriggered: 0, summaryTriggered: 0, skippedNothingNewOrOverdue: 3, pushesSent: 0 });
     });
 
-    it('overdue by age (no due date, more than 7 days) or by due date: assignee, manager and staff are all nudged', async () => {
+    it('overdue by age (no due date, more than 7 days) or by due date: assignee, coordinator and staff are all nudged', async () => {
       for (const e of [
         entry({ id: 'o1', status: 'NOT_STARTED', assignee: lee, created: ago(8 * 24) }),
         entry({ id: 'o2', status: 'IN_PROCESS', due: '2026-01-13', assignee: lee, created: ago(4 * 24) }),
@@ -421,6 +471,20 @@ describe('daily job', () => {
       w.sender.sent.length = 0;
       await w.run(new Date(NOW.getTime() + 72 * H));
       expect(w.sender.sent).toEqual([]);
+    });
+
+    it('a coordinator\'s summary is held and retried the same way, even before they are matched to Lead', async () => {
+      const w = world([entry({ id: 'u1', status: 'NOT_STARTED', assignee: null, created: ago(6) })]);
+      const cleo = w.store.addLeader({ name: 'Cleo Byname', coordinatorOf: ['Outreach'] }, 1);
+      w.sender.failing = [(await w.store.listSubscriptions(cleo))[0]!.endpoint];
+      expect(await w.run()).toMatchObject({ undelivered: 1, retryFrom: { [cleo]: LAST.toISOString() } });
+      expect(w.pushed()).toEqual(['mara', 'owner']); // the other coordinator and staff got theirs
+      w.sender.failing = [];
+      w.sender.sent.length = 0;
+      // Next morning the student is no longer new for anyone else, but still is for Cleo: only she is nudged.
+      expect(await w.run(new Date(NOW.getTime() + 24 * H))).toMatchObject({ undelivered: 0, retryFrom: {} });
+      expect(bodiesFor(w.sender, cleo).map((p) => `${p.title} | ${p.body}`)).toEqual(['1 student waiting | 1 unassigned']);
+      expect(w.sender.sent).toHaveLength(1);
     });
 
     it('a hold is one person\'s: others are not nudged again, and a hold older than the follow-up week is dropped', async () => {

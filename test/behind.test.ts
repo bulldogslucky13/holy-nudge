@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allQueuesView,
   computeNudges,
   isBehind,
   isNewSinceLastRun,
@@ -7,6 +8,7 @@ import {
   isPastFirstText,
   isUnassigned,
   ownTriggered,
+  queueIdsForKeys,
   summaryTriggered,
 } from '../src/core/behind';
 import type { Status } from '../src/core/types';
@@ -142,7 +144,7 @@ describe('computeNudges', () => {
     const r = computeNudges([qA, qB, qParking], entries, config({ excludedQueues: ['Parking'] }), NOON);
     expect(r.leaders.map((l) => l.leader.id)).toEqual(['L1']); // Kim has only DONE, waiting-future and excluded work
     expect(r.leaders[0]!.behind.map((x) => x.id)).toEqual(['1', '3']);
-    expect(r.admins.flatMap((a) => a.behindByLeader.flatMap((g) => g.entries)).some((x) => x.id === '5')).toBe(false);
+    expect(allQueuesView([qA, qB, qParking], entries, config({ excludedQueues: ['Parking'] }), NOON).behindByLeader.flatMap((g) => g.entries).some((x) => x.id === '5')).toBe(false);
   });
   it('excluded queues can be matched by id', () => {
     const r = computeNudges([qA, qB, qParking], entries, config({ excludedQueues: ['P'] }), NOON);
@@ -152,38 +154,61 @@ describe('computeNudges', () => {
     const r = computeNudges([qA, qB, qParking], entries, config(), NOON);
     expect(r.leaders.map((l) => l.leader.id)).toEqual(['L2', 'L1']); // sorted by name: Kim, Lee
   });
-  it('falls back to queue managers as admins and groups by leader, unassigned last', () => {
+  it('Lead queue managers grant nothing: with no coordinators, nobody gets a whole-queue view', () => {
     const r = computeNudges([qA, qB], entries, config(), NOON);
-    expect(r.admins.map((a) => a.adminId)).toEqual(['M1', 'M2']);
-    const m1r = r.admins[0]!;
-    expect(m1r.queueIds).toEqual(['A']);
-    expect(m1r.name).toBe('Mgr One');
-    expect(m1r.behindByLeader.map((g) => [g.leader?.id, g.entries.map((x) => x.id)])).toEqual([['L1', ['1']]]);
-    const m2r = r.admins[1]!;
-    expect(m2r.behindByLeader.map((g) => [g.leader?.id ?? null, g.entries.map((x) => x.id)])).toEqual([
+    expect(r.coordinators).toEqual([]);
+    expect(computeNudges([qA, qB], entries, config(), NOON, [])).toEqual(r);
+  });
+  it('a coordinator sees exactly their queues (by id or exact name), grouped by leader, unassigned last', () => {
+    const r = computeNudges([qA, qB, qParking], entries, config(), NOON, [
+      { leaderId: 7, queueKeys: ['A'] },
+      { leaderId: 3, queueKeys: ['Beta'] },
+    ]);
+    expect(r.coordinators.map((c) => [c.leaderId, c.queueIds])).toEqual([[3, ['B']], [7, ['A']]]);
+    const a = r.coordinators[1]!;
+    expect(a.behindByLeader.map((g) => [g.leader?.id, g.entries.map((x) => x.id)])).toEqual([['L1', ['1']]]);
+    expect(a.unassigned).toEqual([]);
+    const b = r.coordinators[0]!;
+    expect(b.behindByLeader.map((g) => [g.leader?.id ?? null, g.entries.map((x) => x.id)])).toEqual([
       ['L1', ['3']],
       [null, ['4']],
     ]);
-    expect(m2r.unassigned.map((x) => x.id)).toEqual(['4']);
-    expect(m1r.unassigned).toEqual([]);
+    expect(b.unassigned.map((x) => x.id)).toEqual(['4']);
   });
-  it('config mapping overrides managers (by name or id); empty mapping falls back', () => {
-    const cfg = config({ adminsByQueue: { Alpha: ['X9', 'M2'], B: [] } });
-    const r = computeNudges([qA, qB], entries, cfg, NOON);
-    expect(r.admins.map((a) => [a.adminId, a.queueIds])).toEqual([
-      ['M2', ['A', 'B']],
-      ['X9', ['A']],
+  it('several keys (and the same row listed twice) give the union, in queue order', () => {
+    const r = computeNudges([qA, qB], entries, config(), NOON, [
+      { leaderId: 1, queueKeys: ['Beta'] },
+      { leaderId: 1, queueKeys: ['A'] },
     ]);
-    const m2r = r.admins[0]!;
-    expect(m2r.behindByLeader.flatMap((g) => g.entries.map((x) => x.id)).sort()).toEqual(['1', '3', '4']);
-    expect(r.admins[1]!.name).toBeNull();
+    expect(r.coordinators.map((c) => [c.leaderId, c.queueIds])).toEqual([[1, ['A', 'B']]]);
+    expect(r.coordinators[0]!.behindByLeader.flatMap((g) => g.entries.map((x) => x.id)).sort()).toEqual(['1', '3', '4']);
   });
-  it('an admin with nothing to report is still listed with empty lists', () => {
-    const r = computeNudges([qA], [e('2', 'A', { status: 'DONE' })], config(), NOON);
+  it('unknown keys, near-miss names and excluded queues grant nothing; such a coordinator is left out', () => {
+    const r = computeNudges([qA, qB, qParking], entries, config({ excludedQueues: ['Parking'] }), NOON, [
+      { leaderId: 1, queueKeys: ['alpha', 'Alpha ', 'Z', ''] },
+      { leaderId: 2, queueKeys: ['Parking', 'P'] },
+      { leaderId: 3, queueKeys: [] },
+    ]);
+    expect(r.coordinators).toEqual([]);
+  });
+  it('a key equal to a queue id matches that queue only, never another queue named like it', () => {
+    const q5 = queue({ id: '5', name: 'Five' });
+    const named5 = queue({ id: '9', name: '5' });
+    expect(queueIdsForKeys([q5, named5], ['5'])).toEqual(['5']);
+    expect(queueIdsForKeys([q5, named5], ['Five', '9'])).toEqual(['5', '9']);
+    // An excluded queue's id does not fall through to a name match either.
+    const r = computeNudges([q5, named5], [], config({ excludedQueues: ['Five'] }), NOON, [{ leaderId: 1, queueKeys: ['5'] }]);
+    expect(r.coordinators).toEqual([]);
+  });
+  it('a coordinator with nothing to report is still listed with empty lists', () => {
+    const r = computeNudges([qA], [e('2', 'A', { status: 'DONE' })], config(), NOON, [{ leaderId: 4, queueKeys: ['Alpha'] }]);
     expect(r.leaders).toEqual([]);
-    expect(r.admins).toEqual([
-      { adminId: 'M1', name: 'Mgr One', queueIds: ['A'], unassigned: [], behindByLeader: [] },
-    ]);
+    expect(r.coordinators).toEqual([{ leaderId: 4, queueIds: ['A'], unassigned: [], behindByLeader: [] }]);
+  });
+  it('allQueuesView (staff) covers every non-excluded queue, whoever manages it', () => {
+    const v = allQueuesView([qA, qB, qParking], entries, config({ excludedQueues: ['Parking'] }), NOON);
+    expect(v.queueIds).toEqual(['A', 'B']);
+    expect(v.behindByLeader.flatMap((g) => g.entries.map((x) => x.id)).sort()).toEqual(['1', '3', '4']);
   });
 });
 
@@ -322,8 +347,8 @@ describe('when the push fires', () => {
     const w = win(15);
     const hoursAgo = (h: number) => new Date(morning(15).getTime() - h * H).toISOString();
     const fires = (...es: Parameters<typeof entry>[0][]) => {
-      const r = computeNudges([qA], es.map((over, i) => entry({ id: `x${i}`, queueId: 'A', ...over })), cfg, w.now);
-      return summaryTriggered(r.admins[0]!, w, cfg);
+      const r = computeNudges([qA], es.map((over, i) => entry({ id: `x${i}`, queueId: 'A', ...over })), cfg, w.now, [{ leaderId: 1, queueKeys: ['A'] }]);
+      return summaryTriggered(r.coordinators[0]!, w, cfg);
     };
     it('fires for a new unassigned student, any status', () => {
       expect(fires({ assignee: null, status: 'NOT_STARTED', created: hoursAgo(3) })).toBe(true);

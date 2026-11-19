@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// List leaders (no tokens, ever): id, name, flags, link state, Lead match, devices, last seen.
+// List leaders (no tokens, ever): id, name, flags, link state, Lead match, devices, last seen, and the queue
+// keys each one coordinates (as stored: a queue id or exact name; set with add-leader --coordinator-of).
 // --stale-days N lists only leaders with a working link who have not opened the app in N days (or never),
 // as candidates to turn off with scripts/revoke-leader.mjs. Nothing is changed.
 // Usage: node scripts/list-leaders.mjs [--stale-days N] (--local | --remote)
@@ -29,7 +30,8 @@ const [rows] = d1(
           WHEN l.token IS NOT NULL THEN 'yes (legacy, unhashed)' ELSE 'none' END AS link,
      CASE WHEN l.chms_individual_id IS NOT NULL THEN 'yes' ELSE 'no' END AS matched,
      (SELECT COUNT(*) FROM push_subscriptions s WHERE s.leader_id = l.id) AS devices,
-     COALESCE(l.last_seen_at, 'never') AS last_seen
+     COALESCE(l.last_seen_at, 'never') AS last_seen,
+     COALESCE((SELECT group_concat(c.queue_key, ' | ') FROM queue_coordinators c WHERE c.leader_id = l.id), '') AS coordinates
    FROM leaders l ${filter} ORDER BY l.name;`,
 );
 console.table(rows);

@@ -17,11 +17,17 @@ describe('config', () => {
     expect(() => parseConfig({ ...ok, timeZone: 'Mars/Olympus' })).toThrow(/timeZone/);
     expect(() => parseConfig({ ...ok, morningHour: 24 })).toThrow(/morningHour/);
     expect(() => parseConfig({ ...ok, dataSource: 'csv' })).toThrow(/dataSource/);
-    expect(() => parseConfig({ ...ok, adminsByQueue: { Staff: 'M1' } })).toThrow(/adminsByQueue/);
     expect(() => parseConfig({ ...ok, excludedQueues: [1] })).toThrow(/excludedQueues/);
     expect(() => parseConfig({ ...ok, followUpDays: 0 })).toThrow(/followUpDays/);
     expect(() => parseConfig({ ...ok, followUpDays: 1.5 })).toThrow(/followUpDays/);
     expect(() => parseConfig({ ...ok, firstTextHours: '72' })).toThrow(/firstTextHours/);
+  });
+  it('refuses the removed adminsByQueue key, even empty, pointing at the coordinator rows instead', () => {
+    const ok = loadConfig();
+    expect('adminsByQueue' in ok).toBe(false);
+    for (const v of [{}, { Staff: ['M1'] }]) {
+      expect(() => parseConfig({ ...ok, adminsByQueue: v })).toThrow(/adminsByQueue is no longer supported.*--coordinator-of/);
+    }
   });
   it('nudge-timing thresholds default to one week and 72 hours', () => {
     const ok = loadConfig();

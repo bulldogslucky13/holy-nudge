@@ -471,6 +471,78 @@ button.match-icon::after { content: ""; position: absolute; inset: -14px; }
 .card > .status-line:empty { display: none; }
 .row.person { flex-wrap: nowrap; align-items: flex-start; }
 .chip.staff { background: var(--primary); color: var(--on-primary); }
+/* Staff Team rows: compact (name, chips, coordinator line, last opened); link actions sit in the menu. */
+.card.leader-card { gap: 6px; padding: 14px 16px; }
+.card.leader-card > .meta { margin-top: 2px; }
+.card.leader-card > .minted, .card.leader-card > .match-panel { margin-top: 6px; }
+.coordinates { overflow-wrap: anywhere; }
+.person-end { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+
+/* ---------- per-row link menu (staff) ---------- */
+
+.more { position: relative; display: inline-flex; }
+/* 32px to look at; the ::after makes the tap target 44px without moving anything. */
+.more-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin: -3px -8px -3px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+.more-btn::after { content: ""; position: absolute; inset: -6px; }
+.more-btn:hover, .more-btn[aria-expanded="true"] { background: var(--card-soft); }
+.more-btn[disabled] { opacity: 0.6; cursor: default; }
+.more-glyph {
+  display: block;
+  width: 22px;
+  height: 22px;
+  background: var(--muted);
+  -webkit-mask: url("/more.svg") center / contain no-repeat;
+  mask: url("/more.svg") center / contain no-repeat;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: -6px;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  min-width: 180px;
+  max-width: calc(100vw - 40px);
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(20, 24, 32, 0.22);
+}
+.menu[hidden] { display: none; }
+.menu.up { top: auto; bottom: calc(100% + 8px); }
+.menu-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.menu-item:hover, .menu-item:focus { background: var(--card-soft); }
+.menu-item:focus-visible { outline-offset: -3px; }
 
 /* ---------- add a leader (staff) ---------- */
 

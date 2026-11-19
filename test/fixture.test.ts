@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeNudges, isBehind, isNewSinceLastRun, isOverdue, isPastFirstText, ownTriggered } from '../src/core/behind';
+import { allQueuesView, computeNudges, isBehind, isNewSinceLastRun, isOverdue, isPastFirstText, ownTriggered } from '../src/core/behind';
 import { loadConfig } from '../src/core/config';
 import { createFixtureSource } from '../src/chms/fixture';
 import { addDays, zonedDate } from '../src/core/time';
@@ -56,13 +56,18 @@ describe('fixture source', () => {
     expect(leaderTotal).toBeGreaterThan(10);
     expect(r.leaders.every((l) => l.behind.length > 0)).toBe(true);
 
-    // Two fixture managers administer everything by default.
-    expect(r.admins.map((a) => a.adminId).sort()).toEqual(['M201', 'M202']);
-    const adminBehind = r.admins.flatMap((a) => a.behindByLeader.flatMap((g) => g.entries));
-    expect(adminBehind).toHaveLength(expectedBehind.length); // each queue has exactly one admin
-    expect(r.admins.flatMap((a) => a.unassigned).length).toBeGreaterThan(3);
+    // The fixture's queue managers grant nothing: no coordinator rows, no whole-queue views.
+    expect(r.coordinators).toEqual([]);
+    // Staff see everything that is not parked.
+    const all = allQueuesView(queues, entries, config, NOW);
+    const adminBehind = all.behindByLeader.flatMap((g) => g.entries);
+    expect(adminBehind).toHaveLength(expectedBehind.length);
+    expect(all.unassigned.length).toBeGreaterThan(3);
     // Nothing from the parking queues leaks through.
     expect(adminBehind.some((e) => parking.has(e.queueId))).toBe(false);
+    // A coordinator of one sample queue (by exact name) sees that queue only.
+    const one = computeNudges(queues, entries, config, NOW, [{ leaderId: 1, queueKeys: ['Service Team'] }]).coordinators;
+    expect(one.map((c) => c.queueIds)).toEqual([['7']]);
   });
 
   it('exercises every nudge-timing case (last run 24 hours before now)', async () => {

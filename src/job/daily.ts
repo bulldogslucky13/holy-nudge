@@ -12,7 +12,7 @@ import type { JobRunSummary, Store } from '../db';
 import { addCounts, deliverToLeader, emptyCounts, type DeliveryCounts } from '../push/deliver';
 import { adminPayload, alertPayload, combinedPayload, leaderPayload, type AlertReason } from '../push/payload';
 import type { PushSender } from '../push/sender';
-import { adminCounts, globalAdminView, loadSnapshot, peopleSeen, syncLeaders, type Snapshot } from './load';
+import { adminCounts, coordinatorScopes, globalAdminView, loadSnapshot, peopleSeen, syncLeaders, type Snapshot } from './load';
 
 /** Local wall-clock hour (0-23) of an instant in an IANA zone. */
 export function localHour(now: Date, timeZone: string): number {
@@ -98,7 +98,8 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
       return window.lastRunAt !== null && window.lastRunAt.getTime() <= t ? window : { now, lastRunAt: new Date(t) };
     };
 
-    const nudges = computeNudges(snapshot.queues, snapshot.entries, config, now);
+    // Whole-queue summaries go only to staff and to rows marked as coordinators (queue_coordinators).
+    const nudges = computeNudges(snapshot.queues, snapshot.entries, config, now, coordinatorScopes(rows));
     let delivery: DeliveryCounts = emptyCounts();
     /** People told about their own students (alone or in a combined push). */
     let leadersNudged = 0;
@@ -130,14 +131,16 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
       own.set(row.id, { count: l.behind.length, fires: ownTriggered(l.behind, windowFor(row.id), config) });
     }
 
-    // Admin summaries: is_admin rows get the whole process; other queue admins get their queues.
+    // Summaries: is_admin rows get the whole process; coordinators get the queues they coordinate. Keyed by
+    // leader row, so a coordinator not yet matched to Lead still gets theirs. A Lead queue manager gets none.
     const summaries = new Map<number, { counts: ReturnType<typeof adminCounts>; view: SummaryView }>();
     const globalView = globalAdminView(snapshot, config, now);
     const globalCounts = adminCounts(globalView);
     const global = { counts: globalCounts, view: globalView };
     for (const row of rows) if (row.isAdmin) summaries.set(row.id, global);
-    for (const a of nudges.admins) {
-      const row = byChms.get(a.adminId);
+    const rowById = new Map(rows.map((r) => [r.id, r]));
+    for (const a of nudges.coordinators) {
+      const row = rowById.get(a.leaderId);
       if (!row || summaries.has(row.id)) continue;
       if (!live && !row.isAdmin) continue;
       summaries.set(row.id, { counts: adminCounts(a), view: a });

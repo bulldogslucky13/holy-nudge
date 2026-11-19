@@ -32,7 +32,7 @@ export function adminPayload(waiting: number, leaders: number, unassigned: numbe
 
 /**
  * One morning push for someone with their own students waiting who also gets an admin summary.
- * Title as leaderPayload; body "12 waiting across your queues, 3 unassigned" (queue managers) or
+ * Title as leaderPayload; body "12 waiting across your queues, 3 unassigned" (coordinators) or
  * "... across all queues ..." (staff), the unassigned part only when there are some. Lands on their own
  * list, so kind and count are the leader ones.
  */

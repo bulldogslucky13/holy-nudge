@@ -28,7 +28,6 @@ export function config(over: Partial<HolyNudgeConfig> = {}): HolyNudgeConfig {
   return {
     processId: '37',
     excludedQueues: [],
-    adminsByQueue: {},
     timeZone: TZ,
     morningHour: 8,
     followUpDays: 7,
