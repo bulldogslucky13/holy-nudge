@@ -541,6 +541,8 @@ describe('daily job', () => {
     const out = await runDailyJob({ config: real, store, sender, dataSource: () => createDataSource(real, {} as never, NOW), now: NOW });
     expect(out.ran && out.summary.queues).toBe(10);
     expect(sender.sent.map((s) => s.payload.kind)).toEqual(['admin']);
-    expect(store.leaders.length).toBeGreaterThan(5);
+    // Sample people never become leader rows: only the owner's row exists, and nothing was matched.
+    expect(store.leaders.map((l) => l.name)).toEqual(['Owner']);
+    expect(out.ran && out.summary.leadersMatched).toBe(0);
   });
 });

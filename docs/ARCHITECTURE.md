@@ -91,7 +91,7 @@ The job sends the person's one push when either fired, built from the full count
 - `leaders(id, chms_individual_id UNIQUE, name, token UNIQUE NULL, token_hash UNIQUE NULL, is_admin, is_owner, created_at, last_seen_at, revoked_at)` (migration 0003):
   - The personal link is `/l/<token>`, token = 32 random bytes, base64url. Only `token_hash` = SHA-256(token), lowercase hex, is stored; lookups are by hash. No row ever holds a usable link the server could show again.
   - `token` is the LEGACY plaintext column from before 0003. New code never writes it. A legacy link still works: the lookup falls back to it, writes the hash and clears the plaintext on first use; `scripts/hash-tokens.mjs` converts the rest. Remove the fallback and drop the column once that script reports 0 left in production.
-  - Rows created automatically (daily job, staff page views) have no link (`token_hash` NULL) until staff mint one.
+  - Rows created automatically (daily job, staff page views) have no link (`token_hash` NULL) until staff mint one. Only when live: on sample data (`dataSource` `fixture`) neither syncs leaders, so sample people never become rows (decision 22).
   - `revoked_at`: link turned off by staff (hash and plaintext cleared, push subscriptions deleted). `last_seen_at`: last authenticated `GET /api/me`, written at most hourly.
   - `is_admin` = staff (whole-process view, link management). `is_owner` = gets failure alerts; only an owner can rotate or turn off an owner's link.
   - `match_by_hand` (migration 0004): staff set or cleared this row's ChMS id from the Team tab; automatic matching never changes it.
@@ -123,6 +123,8 @@ Student data is never stored in D1; views fetch it live through the DataSource (
 Security headers: `public/_headers` covers static files; Pages does not apply it to Functions responses, so `/l/<token>`, `/manifest.webmanifest`, `/api/*` and `/oauth/*` set the same headers in code (`src/api/headers.ts`). CSP: `default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` (no `'unsafe-inline'`: the app uses classes, not style attributes; the OAuth pages allow their one inline `<style>` by hash), plus HSTS, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
 
 ## Daily job
+
+On sample data the job does not sync leaders (no rows created, no matching, `leadersMatched` 0). Everything else below applies as written to a live run; the not-live differences are noted where they matter.
 
 Cron fires at 13:00 and 14:00 UTC; job proceeds only when the Central local hour equals `morningHour` (handles DST). At most one push per person per morning, and only when their own students or their summary has something new or overdue ("When the push fires" above): their own behind count (leader nudge), their admin summary, or, when they have both, one combined push titled like the leader nudge with the body "12 waiting across your queues, 3 unassigned" (coordinators) or "... across all queues ..." (staff), the unassigned part only when non-zero; it has `kind: "leader"` and their own `count`, so it lands on their own list. The run summary counts `leadersNudged` (told about their own students, alone or combined), `adminsNudged` (told a summary, alone or combined), `combinedNudged`, `leadersMatched` (rows matched to Lead this run), and for the timing rules `newAssigned`, `newUnassigned`, `overdueAssigned`, `unassignedPastFirstText` (students, across all queues), `ownTriggered`, `summaryTriggered`, `skippedNothingNewOrOverdue` (people with something waiting but nothing new or overdue) `firstRunFallback` (no previous successful run), `undelivered` (people whose due push reached none of their devices) and `retryFrom` (leader row id to window start for those people; the next run looks back that far for them alone, for at most `followUpDays`). While `dataSource` is `fixture` (not live) only staff rows (`is_admin = 1`) are nudged: a non-staff row, even one that maps to a sample leader or is marked as a coordinator, gets nothing. Once live, a row with no `chms_individual_id` never gets a leader nudge (nudges are matched by ChMS id) but a coordinator row gets its queues' summary whether matched or not. On data-source error: record failed run and push an alert to admins flagged as owner.
 
@@ -185,7 +187,7 @@ Push payload (JSON, counts only): `{ "title": "3 students are waiting on you", "
 
 ### `leaders` table additions
 
-`is_owner` flag (gets failure alerts; Cameron). The daily job (and a staff page view) upserts a leader row for every assignee and queue manager it sees, with no link; staff mint links on demand from the Team tab (or `scripts/add-leader.mjs`).
+`is_owner` flag (gets failure alerts; Cameron). Once live, the daily job (and a staff page view) upserts a leader row for every assignee and queue manager it sees, with no link (on sample data it does not: `leadersMatched` is 0 and the table is left as it was); staff mint links on demand from the Team tab (or `scripts/add-leader.mjs`).
 
 ### File ownership in phase 2
 

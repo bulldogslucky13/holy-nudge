@@ -11,8 +11,21 @@ import { onRequestPost as testPush } from '../functions/api/test-push';
 import { RATE_LIMITS } from '../src/api/http';
 import { cleanLeaderName } from '../src/api/leaders';
 import { CSP } from '../src/api/headers';
+import { createFixtureSource } from '../src/chms/fixture';
 import { hashToken } from '../src/db';
 import { createTestD1, type TestD1 } from './sqlite-d1';
+
+// The bundled config is the sample-data one. A test can switch the endpoints to a live config (real
+// Lead data, here still the made-up fixture people) by setting `mode.live`; it is reset before each test.
+const mode = vi.hoisted(() => ({ live: false }));
+vi.mock('../src/core/config', async (orig) => {
+  const real = await orig<typeof import('../src/core/config')>();
+  return { ...real, loadConfig: () => ({ ...real.loadConfig(), dataSource: mode.live ? ('pushpay' as const) : ('fixture' as const) }) };
+});
+vi.mock('../src/chms/index', async (orig) => {
+  const real = await orig<typeof import('../src/chms/index')>();
+  return { ...real, createDataSource: (config: never, env: never, now: Date) => (mode.live ? createFixtureSource(now, 'America/Chicago') : real.createDataSource(config, env, now)) };
+});
 
 const HOST = 'https://holynudge.cameronbristol.xyz';
 const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql', 'migrations/0005_queue_coordinators.sql'];
@@ -40,6 +53,7 @@ const raw = (leaderId: number) =>
   t.sqlite.prepare('SELECT token, token_hash, last_seen_at, revoked_at FROM leaders WHERE id = ?').get(leaderId) as Record<string, string | null>;
 
 beforeEach(async () => {
+  mode.live = false;
   t = await createTestD1(...MIGRATIONS);
   const ins = t.sqlite.prepare('INSERT INTO leaders (id, chms_individual_id, name, token_hash, token, is_admin, is_owner) VALUES (?, ?, ?, ?, ?, ?, ?)');
   ins.run(id.owner, 'L104', 'Owner Person', await hashToken(tok.owner), null, 1, 1);
@@ -385,7 +399,9 @@ describe('GET /api/me and the nudge window', () => {
 });
 
 describe('GET /api/me privacy contract', () => {
-  it('never sends student email; staff get the leader list without any link or token', async () => {
+  it.each([{ live: false }, { live: true }])('never sends student email; staff get the leader list without any link or token (live: $live)', async ({ live }) => {
+    mode.live = live;
+    const rowsBefore = (t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders').get() as { n: number }).n;
     const owner = (await (await call(me, '/api/me', tok.owner)).json()) as Record<string, any>;
     const text = JSON.stringify(owner);
     expect(text).not.toMatch(/email|@example\.com/);
@@ -399,10 +415,17 @@ describe('GET /api/me privacy contract', () => {
     // Staff see who coordinates what (queue names only, read from the coordinator rows).
     expect(owner.admin.leaders.find((l: any) => l.id === id.manager).coordinates).toEqual(['Connect Card Coordinators']);
     expect(owner.admin.leaders.find((l: any) => l.id === id.leader).coordinates).toEqual([]);
-    // Staff page views create rows for every ChMS leader, with no link.
-    expect(owner.admin.leaders.length).toBeGreaterThan(5);
-    const noLink = t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders WHERE token_hash IS NULL AND token IS NULL').get() as { n: number };
-    expect(noLink.n).toBeGreaterThan(0);
+    const rowsAfter = (t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders').get() as { n: number }).n;
+    if (live) {
+      // Live: staff page views create rows for every ChMS leader, with no link.
+      expect(owner.admin.leaders.length).toBeGreaterThan(5);
+      const noLink = t.sqlite.prepare('SELECT COUNT(*) AS n FROM leaders WHERE token_hash IS NULL AND token IS NULL').get() as { n: number };
+      expect(noLink.n).toBeGreaterThan(0);
+    } else {
+      // Sample data: only the real rows, no invented people.
+      expect(rowsAfter).toBe(rowsBefore);
+      expect(owner.admin.leaders).toHaveLength(rowsBefore);
+    }
   });
 
   it('sends the security headers on API responses', async () => {

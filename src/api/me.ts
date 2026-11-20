@@ -244,7 +244,8 @@ export async function resolveMe({ store, config, leader, now, loadSnapshot }: Re
   if (leader.isAdmin) {
     // Staff manage everyone's link: make sure every leader in ChMS has a row (with no link yet)
     // even before the first daily run, and tie leaders added by name to their Lead person where certain.
-    await syncLeaders(store, peopleSeen(snapshot));
+    // Not on sample data: its people are invented and must not become leader rows (docs/DECISIONS.md, 22).
+    if (isLive(config)) await syncLeaders(store, peopleSeen(snapshot));
     leaders = await store.listLeaders();
     // The sync may have just matched the caller's own row: use the refreshed row, or "Mine" would be
     // built from the stale, unmatched one and show nothing until the next request.
