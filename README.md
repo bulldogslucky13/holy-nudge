@@ -92,6 +92,8 @@ Pushpay refresh tokens are single-use. If one is ever lost (a refresh response t
 
 ## When nudges go out
 
+The rules below were decided on purpose; the reasons, and the other standing decisions, are listed in [docs/DECISIONS.md](docs/DECISIONS.md). Check there before changing any of them.
+
 The morning job decides, person by person, whether there is anything worth a push. It follows the church's written process: coordinators send a first text within 72 hours and assign the card, and the assigned leader follows up within a week.
 
 - **Your own students.** A push the first morning a student assigned to you arrives Not Started, then quiet for their first week, then every morning once they are overdue, until Done. Overdue means past the Lead due date or, with no due date, still Not Started after 7 days (`followUpDays`). In Process or Waiting with no due date never triggers a push.

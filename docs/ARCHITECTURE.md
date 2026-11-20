@@ -1,6 +1,6 @@
 # Holy Nudge architecture
 
-Source of truth for product requirements: `ORCHESTRATOR_PROMPT.md`. This file fixes the technical shape so workers build compatible pieces.
+Source of truth for product requirements: `ORCHESTRATOR_PROMPT.md`. This file fixes the technical shape so workers build compatible pieces. Product decisions and their reasons are in `docs/DECISIONS.md`; check it before changing behaviour.
 
 ## Hosting (decided)
 
