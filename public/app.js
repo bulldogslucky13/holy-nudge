@@ -547,7 +547,7 @@
     matchNote: {}, // leader id -> short note after a match change ("Matched to ...")
     rf: 'idle', // the Refresh button the leader tapped: idle | busy (request or minimum time running) | done (tick showing)
     rfFresh: false, // the next header render plays the halo glow once (then false, so a tab switch does not replay it)
-    rfFailed: false, // the last tapped refresh failed: a note shows under the header until one succeeds
+    rfFailed: false, // the last tapped refresh failed: its note (text) shows under the header until one succeeds
   };
   if (mock) {
     var mockTab = query.get('tab');
@@ -583,6 +583,7 @@
   var REFRESH_MIN_MS = 700;
   var REFRESH_DONE_MS = 1500; // how long the tick shows
   var REFRESH_FAILED = 'Couldn’t refresh. Check your connection and try again.';
+  var REFRESH_TOO_MANY = 'That’s a lot of refreshes. Give it a few minutes and try again.';
   var rfDoneTimer = null;
 
   /* silent: keep the current screen (no loading screen, and a failure leaves it alone).
@@ -631,7 +632,7 @@
             S.view = 'error';
             S.rf = 'idle';
           } else {
-            if (tap) refreshFailed(); // a quiet refresh still fails quietly
+            if (tap) refreshFailed(e instanceof ApiError && (e.status === 429 || e.code === 'rate_limited')); // a quiet refresh still fails quietly
             return;
           }
           render();
@@ -660,7 +661,9 @@
     btn.disabled = busy;
     if (busy) btn.setAttribute('aria-busy', 'true');
     else btn.removeAttribute('aria-busy');
-    head.querySelector('.refresh-note').hidden = !S.rfFailed;
+    var note = head.querySelector('.refresh-note');
+    note.hidden = !S.rfFailed;
+    if (S.rfFailed) note.textContent = S.rfFailed;
   }
 
   function refreshDone() {
@@ -673,11 +676,11 @@
     }, REFRESH_DONE_MS);
   }
 
-  function refreshFailed() {
+  function refreshFailed(tooMany) {
     S.rf = 'idle';
-    S.rfFailed = true;
+    S.rfFailed = tooMany ? REFRESH_TOO_MANY : REFRESH_FAILED;
     paintHead();
-    announce(REFRESH_FAILED);
+    announce(S.rfFailed);
   }
 
   /* The Refresh button. Taps while one is running do nothing. */
