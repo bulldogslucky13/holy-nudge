@@ -210,7 +210,8 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
     // Link management is for staff (is_admin) only, never for coordinators.
     if (leader.isAdmin) {
       out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader, snapshot.queues, snapshot.excludedQueueIds)).sort(byName);
-      out.admin.leadPeople = availableLeadPeople(leaders, peopleSeen(snapshot));
+      // Empty on sample data: its people are invented and have no rows, so offering them would only fail (docs/DECISIONS.md, 22).
+      out.admin.leadPeople = isLive(config) ? availableLeadPeople(leaders, peopleSeen(snapshot)) : [];
     }
   }
   return out;

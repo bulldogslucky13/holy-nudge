@@ -358,6 +358,18 @@ describe('POST /api/leader-match', () => {
     expect(rows()).toEqual(before);
   });
 
+  it('on sample data a match to a sample person with no row is still refused, and nothing changes', async () => {
+    const cfg = loadConfig();
+    expect(cfg.dataSource).toBe('fixture');
+    const held = new Set(rows().map((r) => r.chms));
+    const sample = peopleSeen(await loadSnapshot(createFixtureSource(new Date(), cfg.timeZone), cfg)).find((p) => !held.has(p.id))!;
+    const before = rows();
+    const res = await match(tok.owner, { leaderId: id.newbie, chmsId: sample.id });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'unknown_person' });
+    expect(rows()).toEqual(before);
+  });
+
   it('is staff only: plain leaders and coordinators get 403, no token 401, nothing changes', async () => {
     const before = rows();
     for (const who of [tok.leader, tok.manager, tok.newbie]) {

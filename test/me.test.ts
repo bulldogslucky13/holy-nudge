@@ -140,6 +140,9 @@ describe('GET /api/me response', () => {
     expect(both.admin!.byLeader).toEqual(me.admin!.byLeader);
     expect(both.admin!.leaders!.find((l) => l.id === 4)).toMatchObject({ isStaff: true, coordinates: ['Service Team'] });
     expect(both.admin!.leadPeople).toBeDefined();
+    // Sample data: the key is still there, but empty (no invented people to match to).
+    const sample = buildMe({ config: { ...cfg, dataSource: 'fixture' }, snapshot: snap, leader: owner, leaders, now: NOW });
+    expect(sample.admin!.leadPeople).toEqual([]);
     // A non-owner staff member cannot manage the owner's row.
     const asStaff = buildMe({ config: cfg, snapshot: snap, leader: staff, leaders, now: NOW });
     expect(asStaff.admin!.leaders!.find((l) => l.id === 9)!.canManage).toBe(false);
