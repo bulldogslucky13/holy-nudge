@@ -79,7 +79,8 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     stage = 'job';
 
     const people = peopleSeen(snapshot);
-    const leadersMatched = await syncLeaders(store, people);
+    // On sample data the people seen are invented: they get no leader rows (docs/DECISIONS.md, 22).
+    const leadersMatched = isLive(config) ? await syncLeaders(store, people) : 0;
     const rows = await store.listLeaders();
     const byChms = new Map(rows.filter((r) => r.chmsIndividualId).map((r) => [r.chmsIndividualId!, r]));
 

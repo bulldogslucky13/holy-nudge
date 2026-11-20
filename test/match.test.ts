@@ -17,6 +17,18 @@ import { FakeSender } from './fakes';
 import { config, entry, person, queue } from './helpers';
 import { createTestD1, type TestD1 } from './sqlite-d1';
 
+// The bundled config is the sample-data one. A test sets `mode.live` to run the endpoints under a live
+// config (real Lead data, here still the made-up fixture people); it is reset before each test.
+const mode = vi.hoisted(() => ({ live: false }));
+vi.mock('../src/core/config', async (orig) => {
+  const real = await orig<typeof import('../src/core/config')>();
+  return { ...real, loadConfig: () => ({ ...real.loadConfig(), dataSource: mode.live ? ('pushpay' as const) : ('fixture' as const) }) };
+});
+vi.mock('../src/chms/index', async (orig) => {
+  const real = await orig<typeof import('../src/chms/index')>();
+  return { ...real, createDataSource: (config: never, env: never, now: Date) => (mode.live ? createFixtureSource(now, 'America/Chicago') : real.createDataSource(config, env, now)) };
+});
+
 const MIGRATIONS = ['migrations/0001_init.sql', 'migrations/0002_oauth.sql', 'migrations/0003_link_tokens.sql', 'migrations/0004_lead_match.sql', 'migrations/0005_queue_coordinators.sql'];
 const HOST = 'https://holynudge.cameronbristol.xyz';
 
@@ -24,6 +36,7 @@ let t: TestD1;
 let store: Store;
 
 beforeEach(async () => {
+  mode.live = false;
   t = await createTestD1(...MIGRATIONS);
   store = createD1Store(t.db);
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -345,6 +358,18 @@ describe('POST /api/leader-match', () => {
     expect(rows()).toEqual(before);
   });
 
+  it('on sample data a match to a sample person with no row is still refused, and nothing changes', async () => {
+    const cfg = loadConfig();
+    expect(cfg.dataSource).toBe('fixture');
+    const held = new Set(rows().map((r) => r.chms));
+    const sample = peopleSeen(await loadSnapshot(createFixtureSource(new Date(), cfg.timeZone), cfg)).find((p) => !held.has(p.id))!;
+    const before = rows();
+    const res = await match(tok.owner, { leaderId: id.newbie, chmsId: sample.id });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'unknown_person' });
+    expect(rows()).toEqual(before);
+  });
+
   it('is staff only: plain leaders and coordinators get 403, no token 401, nothing changes', async () => {
     const before = rows();
     for (const who of [tok.leader, tok.manager, tok.newbie]) {
@@ -389,9 +414,10 @@ describe('POST /api/leader-match', () => {
 describe('GET /api/me and matching', () => {
   type StaffView = { admin: { leaders: { id: number; name: string; matched: boolean }[]; leadPeople: { id: string; name: string }[] } };
 
-  it('staff (on sample data) see who is matched and which Lead people are free; no ChMS id on leader rows', async () => {
+  it('staff (live) see who is matched and which Lead people are free; no ChMS id on leader rows', async () => {
+    mode.live = true;
     const cfg = loadConfig();
-    expect(cfg.dataSource).toBe('fixture');
+    expect(cfg.dataSource).toBe('pushpay');
     const sample = peopleSeen(await loadSnapshot(createFixtureSource(new Date(), cfg.timeZone), cfg));
     const [first, second] = sample;
     await insert({ name: 'Owner Person', token: tok.owner, admin: true, owner: true });
@@ -417,6 +443,7 @@ describe('GET /api/me and matching', () => {
   });
 
   it('staff whose own row is matched by this very page view get their own students in the same response', async () => {
+    mode.live = true;
     const cfg = loadConfig();
     const now = new Date();
     const snap = await loadSnapshot(createFixtureSource(now, cfg.timeZone), cfg);
@@ -442,5 +469,30 @@ describe('GET /api/me and matching', () => {
     }
     expect(withoutVisit()).toEqual(before);
     expect(rowById(byName)!.chms).toBeNull();
+  });
+
+  it('staff on sample data: a page view adds no rows, leaves a name-only row unmatched, and lists only real rows', async () => {
+    const cfg = loadConfig();
+    expect(cfg.dataSource).toBe('fixture');
+    const sample = peopleSeen(await loadSnapshot(createFixtureSource(new Date(), cfg.timeZone), cfg));
+    await insert({ name: 'Owner Person', token: tok.owner, admin: true, owner: true });
+    await insert({ name: 'Real Volunteer', token: tok.leader });
+    // A name-only row that equals a sample person's name: it must not be tied to the invented person.
+    const byName = await insert({ name: sample[0]!.name, token: tok.newbie });
+    const before = rows();
+    const view = (await (await call(me, '/api/me', tok.owner)).json()) as StaffView;
+    expect(rows().map(({ last_seen_at: _seen, ...r }) => r)).toEqual(before.map(({ last_seen_at: _seen, ...r }) => r));
+    expect(rowById(byName)!.chms).toBeNull();
+    expect(view.admin.leaders.map((l) => l.name).sort()).toEqual([sample[0]!.name, 'Owner Person', 'Real Volunteer'].sort());
+  });
+
+  it('staff live: a page view creates a row for each Lead person seen, with no link', async () => {
+    mode.live = true;
+    const cfg = loadConfig();
+    const sample = peopleSeen(await loadSnapshot(createFixtureSource(new Date(), cfg.timeZone), cfg));
+    await insert({ name: 'Owner Person', token: tok.owner, admin: true, owner: true });
+    await call(me, '/api/me', tok.owner);
+    expect(rows()).toHaveLength(1 + sample.length);
+    expect(rows().filter((r) => r.chms !== null && r.token_hash === null)).toHaveLength(sample.length);
   });
 });

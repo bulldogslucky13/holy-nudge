@@ -102,7 +102,26 @@ describe('/api/me while not live', () => {
     expect(r.ok && r.me.live).toBe(false);
     expect(r.ok && r.me.leader.isAdmin).toBe(true);
     expect(r.ok && r.me.admin?.byLeader.length).toBeGreaterThan(1);
-    expect(r.ok && r.me.admin?.leaders?.length).toBeGreaterThan(5);
+    // The sample people are not turned into leader rows: staff see only the real row.
+    expect(r.ok && r.me.admin?.leaders?.map((l) => l.name)).toEqual(['Staffer']);
+    expect(store.leaders).toHaveLength(1);
+  });
+
+  it('staff view: rows before and after are identical on sample data; under a live config the sample people do get rows', async () => {
+    const view = async (c: typeof fixtureCfg) => {
+      const store = new FakeStore();
+      store.addLeader({ name: 'Real Volunteer' });
+      const staff = (await store.leaderById(store.addLeader({ name: 'Staffer', isAdmin: true })))!;
+      const before = JSON.stringify(store.leaders);
+      const r = await resolveMe({ store, config: c, leader: staff, now: NOW, loadSnapshot: () => loadSnapshot(createFixtureSource(NOW, c.timeZone), c) });
+      expect(r.ok).toBe(true);
+      return { store, before };
+    };
+    const sample = await view(fixtureCfg);
+    expect(JSON.stringify(sample.store.leaders)).toBe(sample.before);
+    const live = await view(liveCfg);
+    expect(live.store.leaders.length).toBeGreaterThan(5);
+    expect(live.store.leaders.some((l) => l.chmsIndividualId !== null && l.linkToken === null)).toBe(true);
   });
 
   it('when live, non-staff are exactly as before: live true, their own list; a whole-queue view only as a marked coordinator', async () => {
@@ -183,6 +202,26 @@ describe('daily job while not live', () => {
       expect(staffIds.has(id)).toBe(true);
     }
     expect(out.ran && out.summary.adminsNudged).toBe(2);
+  });
+
+  it('creates no leader rows from sample people and matches nothing: the leaders table is exactly what it was', async () => {
+    const store = new FakeStore();
+    store.addLeader({ name: 'Staffer', isAdmin: true }, 1);
+    store.addLeader({ name: 'Real Volunteer' });
+    const before = JSON.stringify(store.leaders);
+    const out = await run(store, new FakeSender());
+    expect(out.ran && out.summary.leadersMatched).toBe(0);
+    expect(JSON.stringify(store.leaders)).toBe(before);
+  });
+
+  it('under a live config the same run creates rows for the people it sees and matches name-only rows', async () => {
+    const people = [...(await sampleLeadersAndManagers())];
+    const store = new FakeStore();
+    store.addLeader({ name: people[0]![1] }); // name-only row for one sample person
+    const out = await runDailyJob({ config: { ...cfg, dataSource: 'pushpay' }, store, sender: new FakeSender(), dataSource: () => createFixtureSource(NOW, cfg.timeZone), now: NOW });
+    expect(out.ran && out.summary.leadersMatched).toBe(1);
+    expect(store.leaders).toHaveLength(people.length);
+    expect(store.leaders.filter((l) => l.chmsIndividualId !== null)).toHaveLength(people.length);
   });
 
   it('the same rows DO get nudged once live (so the guard is the only thing holding them back)', async () => {

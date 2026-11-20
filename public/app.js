@@ -1754,7 +1754,6 @@
       });
     }
     var head = h('p', { class: 'small' }, l.matched ? 'Match ' + firstName(l.name) + ' to someone else in Lead, or clear the match.' : 'Who is ' + l.name + ' in Lead? Once real data is connected, they’ll see the students assigned to that person.');
-    var sampleNote = S.me.live === false ? h('p', { class: 'muted small' }, 'You’re seeing sample data, so these are made-up people.') : null;
     var panelProps = { class: 'match-panel', id: 'match-panel-' + l.id, tabindex: '-1' };
 
     if (!people.length || !NM) {
@@ -1762,8 +1761,7 @@
         'div',
         panelProps,
         head,
-        sampleNote,
-        h('p', { class: 'muted small' }, !NM ? 'The list of people didn’t load. Reload the page and try again.' : 'Nobody in Lead is free to match right now. People show up here once they have a student assigned or manage a queue.'),
+        h('p', { class: 'muted small' }, !NM ? 'The list of people didn’t load. Reload the page and try again.' : S.me.live === false ? 'Matching to Lead opens once real data is connected.' : 'Nobody in Lead is free to match right now. People show up here once they have a student assigned or manage a queue.'),
         h('div', { class: 'btns' }, clearBtn, cancelBtn),
         statusEl
       );
@@ -1915,7 +1913,7 @@
     });
     fillResults();
     showChoice();
-    return h('div', panelProps, head, sampleNote, form);
+    return h('div', panelProps, head, form);
   }
 
   function leaderRow(l) {

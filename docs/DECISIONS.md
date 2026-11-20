@@ -120,8 +120,8 @@ Each entry says what was decided, why, and where it is enforced. No real people'
 - **Where:** `src/chms/oauth.ts` scopes. Original brief.
 
 ### 22. Sample data until the church approves
-- **Decision:** `dataSource` stays `fixture` (invented sample data) until the Master Admin has approved the app and Cameron says to switch. While it is `fixture`, only staff are nudged and nobody else sees anything.
-- **Where:** `config/holy-nudge.config.json`, `src/job/daily.ts`, `test/prelaunch.test.ts`.
+- **Decision:** `dataSource` stays `fixture` (invented sample data) until the Master Admin has approved the app and Cameron says to switch. While it is `fixture`, only staff are nudged and nobody else sees anything. The invented sample people never become leader rows (no daily-job or page-view sync, no matching); leader rows exist only for people added by hand until real data is connected. Decided 2026-11-20.
+- **Where:** `config/holy-nudge.config.json`, `src/job/daily.ts`, `src/api/me.ts`, `test/prelaunch.test.ts`.
 
 ## Operations
 
