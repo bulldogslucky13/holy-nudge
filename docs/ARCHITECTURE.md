@@ -29,7 +29,7 @@ src/job/       daily job: load -> compute behind -> send pushes -> alert on fail
 src/db/        D1 queries
 functions/     Pages Functions (thin; call into src/)
 public/        PWA: index.html, app.js, styles.css (brand tokens), sw.js, manifest.webmanifest, icons,
-               og.png (link preview), sprig.svg, bell.svg + bell-off.svg (Team-tab notification icons, CSS masks), fonts/ (Montserrat + OFL), brand/ (Wildwood College logo)
+               og.png (link preview), sprig.svg, bell.svg + bell-off.svg (Team-tab notification icons, CSS masks), refresh.svg + check.svg (the header Refresh button's arrow and tick, CSS masks), fonts/ (Montserrat + OFL), brand/ (Wildwood College logo)
 scripts/       one-off CLIs; gen-brand-assets.mjs regenerates the icon / preview PNGs (README "Brand")
 cron-worker/   wrangler.toml + index.ts (thin; calls src/job)
 migrations/    D1 SQL

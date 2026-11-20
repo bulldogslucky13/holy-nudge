@@ -17,6 +17,8 @@ const SHELL_ASSETS = [
   '/match-ok.svg',
   '/match-none.svg',
   '/more.svg',
+  '/refresh.svg',
+  '/check.svg',
   '/brand/wildwood-college-navy.png',
   '/brand/wildwood-college-white.png',
   '/favicon.svg',

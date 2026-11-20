@@ -58,7 +58,7 @@
     --wm-nudge: #9db8a3;
     --shadow: 0 0 0 transparent; /* not "none": it is used inside shadow lists */
   }
-  .wordmark img { box-shadow: 0 0 0 1px var(--line); }
+  .wordmark img, .wordmark svg { box-shadow: 0 0 0 1px var(--line); }
 }
 
 * { box-sizing: border-box; }
@@ -111,7 +111,7 @@ a { color: var(--accent-text); }
   line-height: 1;
   text-transform: uppercase;
 }
-.wordmark img {
+.wordmark img, .wordmark svg {
   display: block;
   width: 2.4em;
   height: 2.4em;
@@ -260,6 +260,45 @@ a { color: var(--accent-text); }
   margin-bottom: 4px;
 }
 .top .brand { display: flex; align-items: center; min-width: 0; }
+
+/* Refresh: a round icon button. 36px to look at; the ::after makes the tap target 44px without moving anything.
+   The arrow and the tick are masks (refresh.svg, check.svg) so the colour comes from the tokens; both are always
+   drawn and only one is visible, so the tick never waits on a download. */
+.refresh-btn {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin: 0 4px 0 0;
+  padding: 0;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--card);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.refresh-btn::after { content: ""; position: absolute; inset: -5px; }
+.refresh-btn:active { transform: scale(0.96); }
+.refresh-btn[disabled] { opacity: 0.6; cursor: default; }
+.refresh-glyph {
+  grid-area: 1 / 1;
+  width: 20px;
+  height: 20px;
+  background: var(--text);
+  -webkit-mask: url("/refresh.svg") center / contain no-repeat;
+  mask: url("/refresh.svg") center / contain no-repeat;
+}
+.refresh-glyph.tick {
+  opacity: 0;
+  background: var(--accent-text);
+  -webkit-mask-image: url("/check.svg");
+  mask-image: url("/check.svg");
+}
+.rf-done .refresh-glyph.arrow { opacity: 0; }
+.rf-done .refresh-glyph.tick { opacity: 1; }
+.refresh-note { margin: 2px 0 10px; }
 
 .hello { margin: 16px 0 18px; display: grid; gap: 4px; }
 
@@ -664,4 +703,41 @@ button.match-icon::after { content: ""; position: absolute; inset: -14px; }
 
 @media (prefers-reduced-motion: no-preference) {
   .btn { transition: transform 0.08s ease; }
+
+  /* Refresh: all of the movement lives here. With reduced motion the button is dimmed while busy, then shows the tick. */
+  .refresh-glyph { transition: opacity 0.2s ease; }
+  .rf-busy .refresh-glyph.arrow { animation: rf-spin 0.7s linear infinite; }
+  /* The bell swings from its top, once (about two swings) and settles; the clapper trails a little. Only the
+     bell and clapper move: the navy tile and halo stay put. */
+  .wm-bell, .wm-clapper { transform-origin: 50px 29px; }
+  .rf-busy .wm-bell { animation: rf-swing 0.65s ease-in-out 1; }
+  .rf-busy .wm-clapper { animation: rf-clapper 0.65s ease-in-out 0.06s 1 backwards; }
+  /* Done: the halo glows once, softly. */
+  .rf-glow .wm-halo { transform-box: fill-box; transform-origin: center; animation: rf-glow 0.9s ease-out 1; }
+  .rf-glow .wm-ring { animation: rf-ring 0.9s ease-out 1; }
+}
+@keyframes rf-spin { to { transform: rotate(360deg); } }
+@keyframes rf-swing {
+  0% { transform: rotate(0); }
+  20% { transform: rotate(12deg); }
+  46% { transform: rotate(-9deg); }
+  70% { transform: rotate(5deg); }
+  88% { transform: rotate(-2deg); }
+  100% { transform: rotate(0); }
+}
+@keyframes rf-clapper {
+  0% { transform: rotate(0); }
+  20% { transform: rotate(6deg); }
+  46% { transform: rotate(-4.5deg); }
+  70% { transform: rotate(2.5deg); }
+  88% { transform: rotate(-1deg); }
+  100% { transform: rotate(0); }
+}
+@keyframes rf-ring {
+  35% { stroke-width: 5.4; }
+}
+@keyframes rf-glow {
+  0% { opacity: 0.22; transform: scale(1); }
+  35% { opacity: 0.6; transform: scale(1.1); }
+  100% { opacity: 0.22; transform: scale(1); }
 }
