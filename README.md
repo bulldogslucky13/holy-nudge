@@ -92,11 +92,13 @@ Pushpay refresh tokens are single-use. If one is ever lost (a refresh response t
 
 ## When nudges go out
 
+The rules below were decided on purpose; the reasons, and the other standing decisions, are listed in [docs/DECISIONS.md](docs/DECISIONS.md). Check there before changing any of them.
+
 The morning job decides, person by person, whether there is anything worth a push. It follows the church's written process: coordinators send a first text within 72 hours and assign the card, and the assigned leader follows up within a week.
 
 - **Your own students.** A push the first morning a student assigned to you arrives Not Started, then quiet for their first week, then every morning once they are overdue, until Done. Overdue means past the Lead due date or, with no due date, still Not Started after 7 days (`followUpDays`). In Process or Waiting with no due date never triggers a push.
 - **Unassigned students** (queue coordinators and staff). A push the morning one arrives, then every morning once they have waited more than 72 hours (`firstTextHours`) with nobody assigned.
-- **Other leaders' students** (queue coordinators and staff). Only once one is overdue. Someone else getting a new student is not a reason to nudge you.
+- **Other leaders' students** (queue coordinators and staff). Only once one is overdue. Someone else getting a new student is not a reason to nudge you. This is a design decision, not a gap: an assigned student has an owner, who gets the day-one nudge and the first week to follow up. Coordinators and staff are pulled in by a push only when that week has run out; until then the student is on their Behind list in the app whenever they look.
 
 Still at most one push per person, and when it goes out it carries the full counts, the same numbers the app shows, not just what triggered it. The app's lists are unchanged, except that the Unassigned tab now lists every unassigned student however recently they arrived.
 
