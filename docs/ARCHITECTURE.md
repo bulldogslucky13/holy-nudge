@@ -78,7 +78,7 @@ The lists and counts above are what is waiting; these rules only decide whether 
 - `isOverdue(entry, now, config)`: not `DONE`, and the due date is before today (as `isBehind`), or with no due date, `NOT_STARTED` and `created` more than `followUpDays` (7) of elapsed time ago. In Process / Waiting with no due date: never.
 - `isPastFirstText(entry, now, config)`: `created` more than `firstTextHours` (72) of elapsed time ago.
 - Own push: any of the leader's behind entries is (`NOT_STARTED` and new) or overdue.
-- Summary push: any unassigned entry in scope is new or past the first-text window, or any assigned entry in scope is overdue. A new assignment to someone else never triggers it.
+- Summary push: any unassigned entry in scope is new or past the first-text window, or any assigned entry in scope is overdue. A new assignment to someone else never triggers it. Decided (Cameron, 2026-11-20), not an omission: an assigned `NOT_STARTED` entry is its assignee's to act on, so they alone get the day-one push and the `followUpDays` grace; the summary escalates to coordinators and staff only once it is overdue. The entry still shows in their Behind list throughout. Do not add a day-one summary trigger for assigned entries.
 
 The job sends the person's one push when either fired, built from the full counts as before. Nothing about students is stored: the window is one timestamp per run, and only the daily job writes `job_runs` (GET `/api/me` and every other path read nothing from it and never write it).
 

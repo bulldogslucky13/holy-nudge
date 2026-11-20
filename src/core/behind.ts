@@ -89,6 +89,10 @@ export function ownTriggered(entries: QueueEntry[], w: RunWindow, config: Timing
 /**
  * A summary push fires when an unassigned student in scope is new or past the first-text window, or an
  * ASSIGNED student in scope is overdue. Someone else's new assignment alone never fires it.
+ *
+ * That last part is a design decision, not a gap: an assigned student has an owner, who gets the day-one
+ * nudge and the follow-up week. Coordinators and staff are escalated to only when that week has run out;
+ * until then the student is on their Behind list in the app, without a push.
  */
 export function summaryTriggered(
   a: Pick<AdminResult, 'unassigned' | 'behindByLeader'>,
