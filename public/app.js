@@ -115,6 +115,20 @@
     return el;
   }
 
+  /* Like h(), but for SVG: createElementNS, because h() makes HTML elements (an <svg> built with it never draws). */
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  function hs(tag, props) {
+    var el = document.createElementNS(SVG_NS, tag);
+    var p = props || {};
+    Object.keys(p).forEach(function (k) {
+      var v = p[k];
+      if (v == null || v === false) return;
+      el.setAttribute(k, v === true ? '' : v);
+    });
+    for (var i = 2; i < arguments.length; i++) append(el, arguments[i]);
+    return el;
+  }
+
   function append(el, kid) {
     if (kid == null || kid === false) return;
     if (Array.isArray(kid)) {
@@ -531,6 +545,9 @@
     matchChoice: '', // the Lead person picked in that chooser (survives a re-render)
     matchQuery: null, // what is typed in the chooser's search (null: not opened yet, starts as the leader's first name)
     matchNote: {}, // leader id -> short note after a match change ("Matched to ...")
+    rf: 'idle', // the Refresh button the leader tapped: idle | busy (request or minimum time running) | done (tick showing)
+    rfFresh: false, // the next header render plays the halo glow once (then false, so a tab switch does not replay it)
+    rfFailed: false, // the last tapped refresh failed: its note (text) shows under the header until one succeeds
   };
   if (mock) {
     var mockTab = query.get('tab');
@@ -561,33 +578,128 @@
     return true;
   }
 
-  function load(silent) {
+  /* Refresh by tap: the busy state lasts at least this long even if the answer is back sooner, so a fast
+     refresh still reads. The screen is not re-rendered until the data is in AND this has passed. */
+  var REFRESH_MIN_MS = 700;
+  var REFRESH_DONE_MS = 1500; // how long the tick shows
+  var REFRESH_FAILED = 'Couldn’t refresh. Check your connection and try again.';
+  var REFRESH_TOO_MANY = 'That’s a lot of refreshes. Give it a few minutes and try again.';
+  var rfDoneTimer = null;
+
+  /* silent: keep the current screen (no loading screen, and a failure leaves it alone).
+     tap: the leader tapped Refresh, so show it (busy, then done or a failure note). Only the tap animates. */
+  function load(silent, tap) {
     if (!silent) show(loadingScreen());
+    var hold = tap
+      ? new Promise(function (resolve) {
+          setTimeout(resolve, REFRESH_MIN_MS);
+        })
+      : null;
+    function later(fn) {
+      return hold ? hold.then(fn) : fn();
+    }
     return api('/api/me')
       .then(function (me) {
         rememberToken(token);
         return detectEnv().then(function (env) {
-          S.me = me;
-          S.env = env;
-          S.loadedAt = Date.now();
-          // Keep the server in step if this device is subscribed but the server lost track.
-          if (env.subscribed && !me.leader.notificationsOn && !mock) resyncSubscription();
-          if (silent && S.view === 'main') S.view = 'main';
-          else S.view = needsOnboarding() ? 'onboarding' : 'main';
-          render();
+          return later(function () {
+            S.me = me;
+            S.env = env;
+            S.loadedAt = Date.now();
+            // Keep the server in step if this device is subscribed but the server lost track.
+            if (env.subscribed && !me.leader.notificationsOn && !mock) resyncSubscription();
+            if (silent && S.view === 'main') S.view = 'main';
+            else S.view = needsOnboarding() ? 'onboarding' : 'main';
+            if (tap && S.view === 'main') {
+              S.rf = 'done';
+              S.rfFresh = true;
+              S.rfFailed = false;
+            } else if (tap) S.rf = 'idle';
+            render();
+            if (tap && S.view === 'main') refreshDone();
+          });
         });
       })
       .catch(function (e) {
-        if (e instanceof ApiError && e.code === 'retry') return load(silent);
-        if (e instanceof ApiError && e.status === 401) {
-          S.me = null;
-          S.view = 'invalid';
-        } else if (!silent || !S.me) {
-          S.errorCode = e instanceof ApiError ? e.code : null;
-          S.view = 'error';
-        } else return;
-        render();
+        if (e instanceof ApiError && e.code === 'retry') return load(silent, tap);
+        return later(function () {
+          if (e instanceof ApiError && e.status === 401) {
+            S.me = null;
+            S.view = 'invalid';
+            S.rf = 'idle';
+          } else if (!silent || !S.me) {
+            S.errorCode = e instanceof ApiError ? e.code : null;
+            S.view = 'error';
+            S.rf = 'idle';
+          } else {
+            if (tap) refreshFailed(e instanceof ApiError && (e.status === 429 || e.code === 'rate_limited')); // a quiet refresh still fails quietly
+            return;
+          }
+          render();
+        });
       });
+  }
+
+  /* ---- the Refresh button's states. The header is drawn from S.rf, so they survive a re-render. ---- */
+
+  /* Spoken once, politely. The region lives outside #app so a re-render never replaces it. */
+  var liveEl = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+  document.body.appendChild(liveEl);
+  function announce(text) {
+    liveEl.textContent = text;
+  }
+
+  /* Put S.rf on the header's live nodes (classes and attributes only: no re-render). */
+  function paintHead(head) {
+    head = head || document.querySelector('.head');
+    if (!head) return;
+    var busy = S.rf === 'busy';
+    head.classList.toggle('rf-busy', busy);
+    head.classList.toggle('rf-done', S.rf === 'done');
+    if (S.rf !== 'done') head.classList.remove('rf-glow');
+    var btn = head.querySelector('.refresh-btn');
+    btn.disabled = busy;
+    if (busy) btn.setAttribute('aria-busy', 'true');
+    else btn.removeAttribute('aria-busy');
+    var note = head.querySelector('.refresh-note');
+    note.hidden = !S.rfFailed;
+    if (S.rfFailed) note.textContent = S.rfFailed;
+  }
+
+  function refreshDone() {
+    announce('Updated');
+    clearTimeout(rfDoneTimer);
+    rfDoneTimer = setTimeout(function () {
+      S.rf = 'idle';
+      paintHead();
+      announce('');
+    }, REFRESH_DONE_MS);
+  }
+
+  function refreshFailed(tooMany) {
+    S.rf = 'idle';
+    S.rfFailed = tooMany ? REFRESH_TOO_MANY : REFRESH_FAILED;
+    paintHead();
+    announce(S.rfFailed);
+  }
+
+  /* The Refresh button. Taps while one is running do nothing. */
+  function refreshByTap() {
+    if (S.rf === 'busy') return Promise.resolve();
+    var btn = document.querySelector('.refresh-btn');
+    var hadFocus = !!btn && document.activeElement === btn; // a disabled button drops focus; give it back after
+    var y = window.scrollY;
+    clearTimeout(rfDoneTimer);
+    S.rf = 'busy';
+    S.rfFresh = false;
+    announce('');
+    paintHead();
+    return load(true, true).then(function () {
+      if (S.view !== 'main') return;
+      window.scrollTo(0, y);
+      var again = hadFocus && document.querySelector('.refresh-btn');
+      if (again) again.focus({ preventScroll: true });
+    });
   }
 
   function resyncSubscription() {
@@ -626,12 +738,48 @@
 
   /* The wordmark is the app icon plus live text, coloured by the stylesheet's tokens, so light and dark
      follow the page itself (an SVG with its own prefers-color-scheme rule flips unreliably on iOS). */
-  function wordmark(small) {
+  function wordmark(small, ringable) {
     return h(
       'div',
       { class: 'wordmark' + (small ? ' small' : ''), role: 'img', 'aria-label': 'Holy Nudge' },
-      h('img', { src: '/icon.svg', alt: '', width: '48', height: '48' }),
+      ringable ? bellMark() : h('img', { src: '/icon.svg', alt: '', width: '48', height: '48' }),
       h('span', { class: 'wm-text', 'aria-hidden': 'true' }, h('span', { class: 'wm-holy' }, 'Holy'), h('span', { class: 'wm-nudge' }, 'Nudge'))
+    );
+  }
+
+  /* public/icon.svg, drawn inline so the bell can ring on Refresh: the same shapes, colours and -9 degree tilt.
+     The navy tile and the halo (the ring above the bell, and the soft disc behind it) stay put; the bell (knob,
+     body, rim, face) and the clapper are groups of their own.
+     Colours are the artwork's own fixed hex values, as in the icon files. */
+  function bellMark() {
+    var sage = '#9DB8A3', white = '#FFFFFF', navy = '#29303E', dark = '#68866F';
+    return hs(
+      'svg',
+      { class: 'wm-icon', viewBox: '0 0 100 100', width: '48', height: '48', 'aria-hidden': 'true', focusable: 'false' },
+      hs('rect', { width: '100', height: '100', fill: navy }),
+      hs(
+        'g',
+        { transform: 'translate(-3 .2) scale(1.06)' },
+        hs('circle', { class: 'wm-halo', cx: '50', cy: '52', r: '31', fill: dark, opacity: '.22' }),
+        hs(
+          'g',
+          { transform: 'rotate(-9 50 52)' },
+          hs('ellipse', { class: 'wm-ring', cx: '50', cy: '20', rx: '14', ry: '4.2', fill: 'none', stroke: sage, 'stroke-width': '4.2' }),
+          hs(
+            'g',
+            { class: 'wm-bell' },
+            hs('circle', { cx: '50', cy: '30', r: '3.6', fill: white }),
+            hs('path', { d: 'M50 29c-12 0-18 10-18 22v8l-7 8h50l-7-8v-8c0-12-6-22-18-22z', fill: white }),
+            hs('rect', { x: '25', y: '64', width: '50', height: '7', rx: '3.5', fill: white }),
+            hs('ellipse', { cx: '42.5', cy: '51', rx: '2.4', ry: '3', fill: navy }),
+            hs('ellipse', { cx: '57.5', cy: '51', rx: '2.4', ry: '3', fill: navy }),
+            hs('path', { d: 'M43.5 57.5q6.5 6 13 0', fill: 'none', stroke: navy, 'stroke-width': '2.4', 'stroke-linecap': 'round' }),
+            hs('circle', { cx: '37', cy: '58', r: '3.4', fill: dark, opacity: '.4' }),
+            hs('circle', { cx: '63', cy: '58', r: '3.4', fill: dark, opacity: '.4' })
+          ),
+          hs('g', { class: 'wm-clapper' }, hs('ellipse', { cx: '50', cy: '76', rx: '6.5', ry: '4.5', fill: sage }))
+        )
+      )
     );
   }
 
@@ -1046,19 +1194,33 @@
     return part + ', ' + firstName(S.me.leader.name);
   }
 
+  /* The header: the wordmark (its bell rings while refreshing) and the Refresh icon button, with a note
+     under them if a tapped refresh failed. Drawn from S.rf / S.rfFailed. */
+  function headBar() {
+    var btn = h(
+      'button',
+      { class: 'refresh-btn', type: 'button', 'aria-label': 'Refresh', onclick: refreshByTap },
+      h('span', { class: 'refresh-glyph arrow', 'aria-hidden': 'true' }),
+      h('span', { class: 'refresh-glyph tick', 'aria-hidden': 'true' })
+    );
+    var head = h(
+      'div',
+      { class: 'head' },
+      h('div', { class: 'top' }, h('div', { class: 'brand' }, wordmark(true, true)), btn),
+      h('p', { class: 'status-line err small refresh-note', hidden: true }, REFRESH_FAILED)
+    );
+    paintHead(head);
+    if (S.rfFresh && S.rf === 'done') head.classList.add('rf-glow');
+    S.rfFresh = false;
+    return head;
+  }
+
   function mainScreen() {
     var me = S.me;
     if (isPreLaunch()) return preLaunchScreen();
     var parts = [];
 
-    parts.push(
-      h(
-        'div',
-        { class: 'top' },
-        h('div', { class: 'brand' }, wordmark(true)),
-        h('button', { class: 'btn small-btn', type: 'button', onclick: function () { load(true); } }, 'Refresh')
-      )
-    );
+    parts.push(headBar());
 
     // Staff see sample students until real data is connected; say so, quietly.
     if (me.live === false && me.leader.isAdmin) {
