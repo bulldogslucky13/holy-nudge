@@ -117,10 +117,11 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     /** People whose push was due but reached none of their devices (temporary failure): retried next run. */
     let undelivered = 0;
 
-    // Until real data is connected, everything computed above is about made-up sample students. Only
-    // staff (is_admin) may be nudged about it; a real volunteer whose row happens to map to a sample
-    // leader or queue manager must never get "3 students are waiting on you".
+    // Until real data is connected, everything computed above is about made-up sample students. Only the
+    // owner may be nudged about it (docs/DECISIONS.md, 22): other staff, coordinators and volunteers must
+    // never get "3 students are waiting on you" about invented people. Everyone is nudged once live.
     const live = isLive(config);
+    const mayNudge = (row: { isOwner: boolean }) => live || row.isOwner;
 
     // Their own students waiting, per leader row, and whether any of them is due a push this morning.
     const own = new Map<number, { count: number; fires: boolean }>();
@@ -128,7 +129,7 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     for (const l of nudges.leaders) {
       const row = byChms.get(l.leader.id);
       if (!row || l.behind.length === 0) continue;
-      if (!live && !row.isAdmin) continue;
+      if (!mayNudge(row)) continue;
       own.set(row.id, { count: l.behind.length, fires: ownTriggered(l.behind, windowFor(row.id), config) });
     }
 
@@ -138,12 +139,12 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     const globalView = globalAdminView(snapshot, config, now);
     const globalCounts = adminCounts(globalView);
     const global = { counts: globalCounts, view: globalView };
-    for (const row of rows) if (row.isAdmin) summaries.set(row.id, global);
+    for (const row of rows) if (row.isAdmin && mayNudge(row)) summaries.set(row.id, global);
     const rowById = new Map(rows.map((r) => [r.id, r]));
     for (const a of nudges.coordinators) {
       const row = rowById.get(a.leaderId);
       if (!row || summaries.has(row.id)) continue;
-      if (!live && !row.isAdmin) continue;
+      if (!mayNudge(row)) continue;
       summaries.set(row.id, { counts: adminCounts(a), view: a });
     }
 

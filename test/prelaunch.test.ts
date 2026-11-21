@@ -167,7 +167,7 @@ describe('daily job while not live', () => {
     return out;
   }
 
-  it('sends nothing to non-staff rows (with or without a ChMS id), but still nudges staff', async () => {
+  it('sends nothing to anyone but the owner: not to non-staff rows (with or without a ChMS id), not to other staff', async () => {
     const people = await sampleLeadersAndManagers();
     const store = new FakeStore();
     const sender = new FakeSender();
@@ -176,10 +176,14 @@ describe('daily job while not live', () => {
     // Non-staff rows that happen to map to every sample leader and queue manager, each with a device.
     // Each also marked as a coordinator: before launch that must not send them anything either.
     const mapped = [...people].map(([chmsIndividualId, name]) => store.addLeader({ chmsIndividualId, name, coordinatorOf: ['Service Team'] }, 1));
-    // Staff: one with no ChMS id (global admin summary), one mapped to a sample leader (also gets the leader nudge).
+    // Staff who is not the owner, with a device: sees sample data in the app, but gets no push about it.
     const staffPlain = store.addLeader({ name: 'Staffer', isAdmin: true }, 1);
+    // Owners: one with no ChMS id (global admin summary), one mapped to a sample leader (also gets the leader nudge).
+    const ownerPlain = store.addLeader({ name: 'Owner', isAdmin: true, isOwner: true }, 1);
     const [firstId, firstName] = [...people][0]!;
-    store.leaders.find((l) => l.chmsIndividualId === firstId)!.isAdmin = true;
+    const mappedOwner = store.leaders.find((l) => l.chmsIndividualId === firstId)!;
+    mappedOwner.isAdmin = true;
+    mappedOwner.isOwner = true;
     expect(firstName).toBeTruthy();
 
     const out = await run(store, sender);
@@ -190,13 +194,14 @@ describe('daily job while not live', () => {
     const staffMappedId = store.leaders.find((l) => l.chmsIndividualId === firstId)!.id;
     for (const id of mapped.filter((i) => i !== staffMappedId)) expect(toLeader(id)).toEqual([]);
 
-    expect(toLeader(staffPlain).map((s) => s.payload.kind)).toEqual(['admin']);
-    // The mapped staff row gets one push: its summary, combined with its own count if it has students behind.
+    expect(toLeader(staffPlain)).toEqual([]);
+    expect(toLeader(ownerPlain).map((s) => s.payload.kind)).toEqual(['admin']);
+    // The mapped owner row gets one push: its summary, combined with its own count if it has students behind.
     const mappedPushes = toLeader(staffMappedId);
     expect(mappedPushes).toHaveLength(1);
     expect(mappedPushes[0]!.payload.body).toMatch(/^\d+ waiting across all queues|^Across /);
-    // Everything sent went to staff, and only counts.
-    const staffIds = new Set([staffPlain, staffMappedId]);
+    // Everything sent went to an owner, and only counts.
+    const staffIds = new Set([ownerPlain, staffMappedId]);
     for (const s of sender.sent) {
       const id = Number(/push\.example\/(\d+)\//.exec(s.endpoint)![1]);
       expect(staffIds.has(id)).toBe(true);
