@@ -20,7 +20,7 @@ import { createTestD1, type TestD1 } from './sqlite-d1';
 const mode = vi.hoisted(() => ({ live: false }));
 vi.mock('../src/core/config', async (orig) => {
   const real = await orig<typeof import('../src/core/config')>();
-  return { ...real, loadConfig: () => ({ ...real.loadConfig(), dataSource: mode.live ? ('pushpay' as const) : ('fixture' as const) }) };
+  return { ...real, loadConfig: () => ({ ...real.loadConfig(), dataSource: mode.live ? ('pushpay' as const) : ('fixture' as const), audience: 'everyone' as const }) };
 });
 vi.mock('../src/chms/index', async (orig) => {
   const real = await orig<typeof import('../src/chms/index')>();

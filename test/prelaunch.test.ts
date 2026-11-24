@@ -17,7 +17,7 @@ const row = (over: Partial<LeaderRow>): LeaderRow => ({
 });
 
 const fixtureCfg = loadConfig(); // the bundled config; asserted below to be the fixture one
-const liveCfg = { ...fixtureCfg, dataSource: 'pushpay' as const };
+const liveCfg = { ...fixtureCfg, dataSource: 'pushpay' as const, audience: 'everyone' as const };
 
 describe('isLive', () => {
   it('is false for the fixture and true for anything else', () => {
@@ -223,7 +223,7 @@ describe('daily job while not live', () => {
     const people = [...(await sampleLeadersAndManagers())];
     const store = new FakeStore();
     store.addLeader({ name: people[0]![1] }); // name-only row for one sample person
-    const out = await runDailyJob({ config: { ...cfg, dataSource: 'pushpay' }, store, sender: new FakeSender(), dataSource: () => createFixtureSource(NOW, cfg.timeZone), now: NOW });
+    const out = await runDailyJob({ config: { ...cfg, dataSource: 'pushpay', audience: 'everyone' }, store, sender: new FakeSender(), dataSource: () => createFixtureSource(NOW, cfg.timeZone), now: NOW });
     expect(out.ran && out.summary.leadersMatched).toBe(1);
     expect(store.leaders).toHaveLength(people.length);
     expect(store.leaders.filter((l) => l.chmsIndividualId !== null)).toHaveLength(people.length);
@@ -236,7 +236,7 @@ describe('daily job while not live', () => {
     for (const [chmsIndividualId, name] of people) store.addLeader({ chmsIndividualId, name, coordinatorOf: ['Connect Card Coordinators', 'Service Team'] }, 1);
     // The fixture source is still used for the data; only the config's liveness differs.
     await runDailyJob({
-      config: { ...cfg, dataSource: 'pushpay' },
+      config: { ...cfg, dataSource: 'pushpay', audience: 'everyone' },
       store,
       sender,
       dataSource: () => createFixtureSource(NOW, cfg.timeZone),

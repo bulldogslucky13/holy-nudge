@@ -22,7 +22,7 @@ import { createTestD1, type TestD1 } from './sqlite-d1';
 const mode = vi.hoisted(() => ({ live: false }));
 vi.mock('../src/core/config', async (orig) => {
   const real = await orig<typeof import('../src/core/config')>();
-  return { ...real, loadConfig: () => ({ ...real.loadConfig(), dataSource: mode.live ? ('pushpay' as const) : ('fixture' as const) }) };
+  return { ...real, loadConfig: () => ({ ...real.loadConfig(), dataSource: mode.live ? ('pushpay' as const) : ('fixture' as const), audience: 'everyone' as const }) };
 });
 vi.mock('../src/chms/index', async (orig) => {
   const real = await orig<typeof import('../src/chms/index')>();
@@ -176,7 +176,7 @@ describe('automatic matching (syncLeaders)', () => {
   it('the daily job matches too, and the matched row gets that person\'s nudge (counts only in the summary)', async () => {
     const r = await insert({ name: 'Pat Fakerly', token: 'pat-job-token-nnnnnnnnnnnnnnnnnnnnnnnnn', devices: 1 });
     const pat = person('P1', 'Pat Fakerly');
-    const cfg = config({ dataSource: 'pushpay' });
+    const cfg = config({ dataSource: 'pushpay', audience: 'everyone' });
     const sender = new FakeSender();
     const out = await runDailyJob({
       config: cfg,

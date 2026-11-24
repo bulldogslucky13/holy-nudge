@@ -1,5 +1,5 @@
 import raw from '../../config/holy-nudge.config.json';
-import type { DataSourceKind, HolyNudgeConfig, Status } from './types';
+import type { Audience, DataSourceKind, HolyNudgeConfig, Status } from './types';
 
 export class ConfigError extends Error {}
 
@@ -42,6 +42,26 @@ export function adminQueueUrl(
  */
 export function isLive(config: Pick<HolyNudgeConfig, 'dataSource'>): boolean {
   return config.dataSource !== 'fixture';
+}
+
+/**
+ * The one rule for who may see data and be nudged right now (docs/DECISIONS.md, 22 and 25):
+ *
+ *   dataSource  audience   sees data (app)   gets push
+ *   fixture     (ignored)  staff             owner only
+ *   pushpay     staff      staff             staff
+ *   pushpay     everyone   everyone          everyone
+ *
+ * "Staff" means is_admin rows (the owner included). A coordinator who is not staff is not staff here.
+ * Real data being on at all (leader sync, matching) is `isLive`, not this.
+ */
+export function leaderAccess(
+  config: Pick<HolyNudgeConfig, 'dataSource' | 'audience'>,
+  row: { isAdmin: boolean; isOwner: boolean },
+): { seesData: boolean; getsPush: boolean } {
+  if (!isLive(config)) return { seesData: row.isAdmin, getsPush: row.isOwner };
+  if (config.audience === 'everyone') return { seesData: true, getsPush: true };
+  return { seesData: row.isAdmin, getsPush: row.isAdmin };
 }
 
 function fail(msg: string): never {
@@ -89,6 +109,10 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
 
   if (o.dataSource !== 'fixture' && o.dataSource !== 'pushpay') fail('dataSource must be "fixture" or "pushpay"');
 
+  // Absent means the cautious value: real data reaches staff only until the owner says "everyone".
+  const audience = o.audience === undefined ? 'staff' : o.audience;
+  if (audience !== 'staff' && audience !== 'everyone') fail('audience must be "staff" or "everyone"');
+
   if (typeof o.chmsBaseUrl !== 'string') fail('chmsBaseUrl must be a string');
   try {
     new URL(o.chmsBaseUrl);
@@ -119,6 +143,7 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     followUpDays,
     firstTextHours,
     dataSource: o.dataSource as DataSourceKind,
+    audience: audience as Audience,
     chmsBaseUrl: o.chmsBaseUrl.replace(/\/+$/, ''),
     ...(queueUrlTemplate !== undefined ? { queueUrlTemplate } : {}),
     ...(adminQueueUrlTemplate !== undefined ? { adminQueueUrlTemplate } : {}),

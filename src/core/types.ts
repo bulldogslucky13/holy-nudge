@@ -31,9 +31,18 @@ export interface QueueEntry {
 export interface DataSource {
   listQueues(processId: string): Promise<Queue[]>;
   listEntries(queueId: string): Promise<QueueEntry[]>;
+  /**
+   * Optional: phone numbers for these individuals (id -> number), when queue rows carry none.
+   * Called only for the viewing leader's own students in GET /api/me, never by the daily job or for
+   * a whole-queue view (docs/DECISIONS.md, 24). Must never throw: a failed lookup just has no phone.
+   */
+  phonesFor?(individualIds: readonly string[]): Promise<Map<string, string>>;
 }
 
 export type DataSourceKind = 'fixture' | 'pushpay';
+
+/** Who real data is released to: "staff" (is_admin rows only, the cautious first stage) or "everyone". */
+export type Audience = 'staff' | 'everyone';
 
 export interface HolyNudgeConfig {
   processId: string;
@@ -51,6 +60,11 @@ export interface HolyNudgeConfig {
   /** Hours an unassigned student may wait (for the coordinators' first text) before the summary nudges daily. */
   firstTextHours: number;
   dataSource: DataSourceKind;
+  /**
+   * Who sees real data and is nudged once dataSource is not "fixture" (docs/DECISIONS.md, 25). Ignored
+   * while the data is sample data. Absent in the file means "staff".
+   */
+  audience: Audience;
   /** Base URL for deep links into ChMS. */
   chmsBaseUrl: string;
   /**

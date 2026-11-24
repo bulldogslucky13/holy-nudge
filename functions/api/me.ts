@@ -3,6 +3,7 @@ import { resolveMe } from '../../src/api/me';
 import { createDataSource } from '../../src/chms/index';
 import { loadConfig } from '../../src/core/config';
 import { HOUR_MS } from '../../src/core/time';
+import type { DataSource } from '../../src/core/types';
 import { createD1Store } from '../../src/db';
 import type { Env } from '../../src/env';
 import { loadSnapshot } from '../../src/job/load';
@@ -21,13 +22,16 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   }
 
   const config = loadConfig();
+  let ds: DataSource | undefined;
   const result = await resolveMe({
     store,
     config,
     leader,
     now,
-    // createDataSource inside the closure so a pre-launch caller never even builds a data source.
-    loadSnapshot: () => loadSnapshot(createDataSource(config, env, now), config),
+    // The data source is built inside the closures so a pre-launch caller never even builds one.
+    loadSnapshot: () => loadSnapshot((ds ??= createDataSource(config, env, now)), config),
+    // Own students only (docs/DECISIONS.md, 24). The fixture source has no phonesFor: its rows carry phones.
+    loadPhones: async (ids) => (await ds?.phonesFor?.(ids)) ?? new Map(),
   });
   if (!result.ok) {
     console.error(`api/me: data source failed (${result.errorName})`);

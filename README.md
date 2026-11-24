@@ -100,7 +100,7 @@ The morning job decides, person by person, whether there is anything worth a pus
 - **Unassigned students** (queue coordinators and staff). A push the morning one arrives, then every morning once they have waited more than 72 hours (`firstTextHours`) with nobody assigned.
 - **Other leaders' students** (queue coordinators and staff). Only once one is overdue. Someone else getting a new student is not a reason to nudge you. This is a design decision, not a gap: an assigned student has an owner, who gets the day-one nudge and the first week to follow up. Coordinators and staff are pulled in by a push only when that week has run out; until then the student is on their Behind list in the app whenever they look.
 
-While the app is on sample data, only the owner gets these pushes; everyone else's start once real data is connected.
+While the app is on sample data, only the owner gets these pushes. Once real data is connected, `audience` decides who: `"staff"` (the first stage) sends them to staff only, `"everyone"` sends them to everyone, by the rules above. Nobody's notification settings change when the audience widens: a leader who already turned notifications on simply starts receiving.
 
 Still at most one push per person, and when it goes out it carries the full counts, the same numbers the app shows, not just what triggered it. The app's lists are unchanged, except that the Unassigned tab now lists every unassigned student however recently they arrived.
 
@@ -113,6 +113,8 @@ Still at most one push per person, and when it goes out it carries the full coun
 - `processId`: the ChMS process (College New Student is `"37"`).
 - `excludedQueues`: queue names (exact) or ids to ignore, such as the "DONE- do not move here unless you have left a note" and "Not Interested" parking queues.
 - `timeZone`, `morningHour`: when the nudge goes out.
+- `dataSource`: `"fixture"` (invented sample data) or `"pushpay"` (real data). Switch only when Cameron says to.
+- `audience`: `"staff"` or `"everyone"` (default `"staff"` when the key is missing). Who real data is released to once `dataSource` is `"pushpay"`. With `"staff"`, only staff (rows flagged `--admin`, the owner included) see students in the app and get notifications; everyone else, coordinators who are not staff included, sees the same "you're all set" screen as before launch and gets nothing. With `"everyone"`, access and timing follow the normal rules. Ignored while `dataSource` is `"fixture"` (staff see sample data, only the owner is nudged). Leader rows are still created and matched to Lead in either stage. See decision 25 in [docs/DECISIONS.md](docs/DECISIONS.md).
 - `followUpDays` (default 7), `firstTextHours` (default 72): how long before a student counts as overdue for their leader, and how long one may wait unassigned, before the morning nudge repeats daily. See "When nudges go out".
 - `chmsBaseUrl`, `queueUrlTemplate`: the "Open in ChMS" link (`{chmsBaseUrl}` and `{queueId}` are filled in). `adminQueueUrlTemplate` (optional) is the admin-view link: one queue, one status, every assignee (`{statusId}` is filled in).
 
@@ -205,5 +207,5 @@ Bump `CACHE` in `public/sw.js` whenever a cached shell asset changes.
 ## Not yet verified
 
 - Migration 0003, the security headers and the CSP were checked locally (wrangler pages dev, curl, and the desktop app's browser pane, which cannot register service workers at all). Not yet checked on the deployed site or on an iPhone Home Screen app: service worker registration, the manifest and notifications under the new CSP, and an installed app switching to a self-rotated link.
-- Everything marked `SANDBOX:` in `src/chms/` (token endpoint body format, whether the API returns every assignee's people under the approving admin, paging headers, date formats, phone numbers on queue rows, rate-limit headers). Needs the sandbox credentials.
+- What is still marked `SANDBOX:` in `src/chms/`: whether `unassigned_count` includes DONE entries (the check now reads it as an open count), whether `process_ids[]` is honoured on `/queues_individuals`, the shape of an unassigned `assignee`, the contents of `managers`/`queue_managers` on queue list rows, and the token refresh and error details. Paging headers, date formats, `queue_ids[]`, phone shapes (empty on queue rows, real on `/individuals/{id}`), other assignees' rows being visible and rate-limit headers were confirmed against production on 2026-11-24 (`docs/chms-api-notes.md`). Phone lookups for a leader's own students (decision 24) have only been tested against fakes.
 - The "Open in ChMS" link pattern (`queueUrlTemplate`) comes from real queue URLs, but it assumes the API queue id equals the web `step_id`; confirm by tapping a link once live data is on. The web status number for In Process (1) is inferred; Not Started (3), Waiting (0) and Done (2) come from real URLs.

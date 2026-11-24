@@ -22,6 +22,14 @@ describe('config', () => {
     expect(() => parseConfig({ ...ok, followUpDays: 1.5 })).toThrow(/followUpDays/);
     expect(() => parseConfig({ ...ok, firstTextHours: '72' })).toThrow(/firstTextHours/);
   });
+  it('audience: bundled value is staff, absent defaults to staff, anything else is rejected', () => {
+    const ok = loadConfig();
+    expect(ok.audience).toBe('staff');
+    const { audience: _a, ...rest } = ok;
+    expect(parseConfig(rest).audience).toBe('staff');
+    expect(parseConfig({ ...ok, audience: 'everyone' }).audience).toBe('everyone');
+    for (const bad of ['all', 'Staff', '', null, 1, true]) expect(() => parseConfig({ ...ok, audience: bad })).toThrow(/audience/);
+  });
   it('refuses the removed adminsByQueue key, even empty, pointing at the coordinator rows instead', () => {
     const ok = loadConfig();
     expect('adminsByQueue' in ok).toBe(false);

@@ -1,7 +1,7 @@
 // Builds the GET /api/me response (docs/ARCHITECTURE.md "JSON contract").
 import { computeNudges, queueIdsForKeys, type AdminResult } from '../core/behind';
 import { availableLeadPeople } from '../core/match';
-import { adminQueueUrl, isLive, queueUrl } from '../core/config';
+import { adminQueueUrl, isLive, leaderAccess, queueUrl } from '../core/config';
 import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from '../core/time';
 import type { HolyNudgeConfig, Queue, QueueEntry, Status } from '../core/types';
 import { errorClassName } from '../core/errors';
@@ -55,8 +55,10 @@ export interface LeadPersonJson {
 export interface MeJson {
   leader: { name: string; isAdmin: boolean; notificationsOn: boolean };
   /**
-   * True when real church data is connected (config.dataSource is not "fixture"). When false, what
-   * staff see is sample data, and everyone else gets an empty `behind` and no `admin` (pre-launch).
+   * True when real church data is connected (config.dataSource is not "fixture") and this person may see
+   * it. When false, what staff see is sample data, and anyone who may not see data yet (non-staff on
+   * sample data, or non-staff while real data is released to staff only) gets an empty `behind`, no
+   * `admin` and `live: false` (pre-launch).
    */
   live: boolean;
   behind: ItemJson[];
@@ -129,11 +131,12 @@ export function isAdminFor(leader: LeaderRow, config: HolyNudgeConfig, snapshot:
 }
 
 /**
- * Pre-launch: real data is not connected yet and this person is not staff. They must never see (or
- * be nudged about) the made-up sample students, whatever their row happens to map to.
+ * Pre-launch for this person: they may not see data yet (sample data and not staff, or real data released
+ * to staff only and they are not staff). They must never see, or be nudged about, students, whatever
+ * their row happens to map to. See `leaderAccess`.
  */
-export function isPreLaunchFor(config: Pick<HolyNudgeConfig, 'dataSource'>, leader: Pick<LeaderRow, 'isAdmin'>): boolean {
-  return !isLive(config) && !leader.isAdmin;
+export function isPreLaunchFor(config: Pick<HolyNudgeConfig, 'dataSource' | 'audience'>, leader: Pick<LeaderRow, 'isAdmin' | 'isOwner'>): boolean {
+  return !leaderAccess(config, leader).seesData;
 }
 
 export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput): MeJson {
@@ -222,14 +225,19 @@ export interface ResolveMeInput {
   config: HolyNudgeConfig;
   leader: LeaderRow;
   now: Date;
-  /** Reads the data source. Never called for a pre-launch (non-staff, not live) caller. */
+  /** Reads the data source. Never called for a pre-launch caller (one who may not see data yet). */
   loadSnapshot: () => Promise<Snapshot>;
+  /**
+   * Phone lookups for the viewer's own students ("Mine") only, in the order shown; the data source
+   * caps how many (MAX_PHONE_LOOKUPS). Never used for whole-queue views: those cards have no phone.
+   */
+  loadPhones?: (individualIds: string[]) => Promise<Map<string, string>>;
 }
 
 export type ResolveMeResult = { ok: true; me: MeJson } | { ok: false; errorName: string };
 
 /** The whole GET /api/me after authentication and rate limiting: load what is needed, then build the response. */
-export async function resolveMe({ store, config, leader, now, loadSnapshot }: ResolveMeInput): Promise<ResolveMeResult> {
+export async function resolveMe({ store, config, leader, now, loadSnapshot, loadPhones }: ResolveMeInput): Promise<ResolveMeResult> {
   if (isPreLaunchFor(config, leader)) {
     // No snapshot, no leader list: nothing from the data source is read for this person.
     return { ok: true, me: buildMe({ config, snapshot: { queues: [], entries: [] }, leader, leaders: [leader], now }) };
@@ -255,5 +263,34 @@ export async function resolveMe({ store, config, leader, now, loadSnapshot }: Re
     // Coordinators see notification status for the leaders in their queues; no link features.
     leaders = await store.listLeaders();
   }
-  return { ok: true, me: buildMe({ config, snapshot, leader, leaders, now }) };
+  const me = buildMe({ config, snapshot, leader, leaders, now });
+  if (loadPhones && me.behind.length > 0) await addOwnPhones(me, snapshot, loadPhones);
+  return { ok: true, me };
+}
+
+/**
+ * Fill in phone numbers on the viewer's own list (`behind`) only, where the snapshot has none (Lead
+ * sends no phones with queue rows). Whole-queue items are never touched, even for the same student.
+ * A failed lookup leaves the card without a phone; it never fails the page.
+ */
+async function addOwnPhones(me: MeJson, snapshot: Snapshot, loadPhones: (ids: string[]) => Promise<Map<string, string>>): Promise<void> {
+  const entryById = new Map(snapshot.entries.map((e) => [e.id, e]));
+  const individualOf = new Map<ItemJson, string>();
+  for (const item of me.behind) {
+    const e = entryById.get(item.entryId);
+    if (e && e.status !== 'DONE' && !item.individual.phone) individualOf.set(item, e.individual.id);
+  }
+  if (individualOf.size === 0) return;
+  let phones: Map<string, string>;
+  try {
+    phones = await loadPhones([...new Set(individualOf.values())]);
+  } catch {
+    return;
+  }
+  // New objects, so nothing shared with whole-queue items can pick up the number.
+  me.behind = me.behind.map((item) => {
+    const id = individualOf.get(item);
+    const phone = id === undefined ? undefined : phones.get(id);
+    return phone ? { ...item, individual: { name: item.individual.name, phone } } : item;
+  });
 }
