@@ -35,15 +35,16 @@ const WEB_STATUS_ID: Record<Status, string> = { WAITING: '0', IN_PROCESS: '1', D
 export const DEFAULT_ADMIN_QUEUE_URL_TEMPLATE =
   '{chmsBaseUrl}/step_individuals.php?ax=my&search_flag=1&step_id={queueId}&srch%5Bstatus_id%5D={statusId}&srch%5Bassigned%5D=all';
 
+/** With no `status` the status filter is left empty, which is the whole-queue link (every status, every assignee). */
 export function adminQueueUrl(
   config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'adminQueueUrlTemplate'>,
   queueId: string,
-  status: Status,
+  status?: Status,
 ): string {
   return (config.adminQueueUrlTemplate ?? DEFAULT_ADMIN_QUEUE_URL_TEMPLATE)
     .replaceAll('{chmsBaseUrl}', config.chmsBaseUrl)
     .replaceAll('{queueId}', encodeURIComponent(queueId))
-    .replaceAll('{statusId}', WEB_STATUS_ID[status]);
+    .replaceAll('{statusId}', status ? WEB_STATUS_ID[status] : '');
 }
 
 /**

@@ -71,6 +71,12 @@ export interface MeJson {
     /** Every unassigned, not-Done student in the admin's queues, longest waiting first. */
     unassigned: UnassignedItemJson[];
     byLeader: { leader: { name: string } | null; notificationsOn: boolean; items: ItemJson[] }[];
+    /**
+     * The non-excluded queues in this person's scope, in Lead's order: all of them for staff, only the ones they
+     * coordinate for a coordinator. The Follow-ups tab groups `byLeader` items by `queueId` in this order. `url` is the
+     * whole queue in ChMS (every status, every assignee). No people.
+     */
+    queues: { id: string; name: string; url: string }[];
     leadersWithoutNotifications: { name: string }[];
     /** Staff only (leaders flagged is_admin). Coordinators never get this key. */
     leaders?: LeaderAdminJson[];
@@ -217,6 +223,7 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
         notificationsOn: g.leader ? notificationsOn(g.leader.id) : false,
         items: g.entries.map(adminItem).sort(byUrgency),
       })),
+      queues: snapshot.queues.filter((q) => scope.has(q.id)).map((q) => ({ id: q.id, name: q.name, url: adminQueueUrl(config, q.id) })),
       leadersWithoutNotifications: [...scopeLeaders]
         .filter(([id]) => !notificationsOn(id))
         .map(([, name]) => ({ name }))
