@@ -51,7 +51,7 @@ Each entry says what was decided, why, and where it is enforced. No real people'
 ## Who sees what
 
 ### 9. A whole-queue view is for staff and marked coordinators only
-- **Decision:** Seeing everyone in a queue (Unassigned, Behind, Team, and the morning summary) is for staff (every queue) and people marked as that queue's coordinator (that queue). Everyone else sees only students assigned to them.
+- **Decision:** Seeing everyone in a queue (Unassigned, Follow-ups, Team, and the morning summary) is for staff (every queue) and people marked as that queue's coordinator (that queue). Everyone else sees only students assigned to them.
 - **Why:** Least access. A servant leader needs their own students, not the whole list.
 - **Where:** `src/core/behind.ts` "whole-queue scope", `src/api/me.ts`, `test/me.test.ts`. Decided 2026-11-19.
 
@@ -93,7 +93,7 @@ Each entry says what was decided, why, and where it is enforced. No real people'
 
 ### 17. Summaries skip other people's new assignments
 - **Decision:** A coordinator or staff member gets a summary push about an **assigned** student only once that student is overdue. A newly assigned, Not Started student triggers a push for the assignee alone.
-- **Why:** An assigned student has an owner, who gets the day-one nudge and the week to follow up. Coordinators and staff are escalated to only when that week has run out. Until then the student is on their Behind list in the app whenever they look. This is not a gap; do not add a day-one summary trigger for assigned students.
+- **Why:** An assigned student has an owner, who gets the day-one nudge and the week to follow up. Coordinators and staff are escalated to only when that week has run out. Until then the student is on the Follow-ups list in the app whenever they look. This is not a gap; do not add a day-one summary trigger for assigned students.
 - **Where:** `summaryTriggered` in `src/core/behind.ts`; `test/behind.test.ts` ("does not fire just because someone else got a new assignment"), `test/job.test.ts`. Decided 2026-11-20.
 
 ### 18. One push per person per morning
@@ -138,6 +138,11 @@ Each entry says what was decided, why, and where it is enforced. No real people'
 - **Decision:** On the Team tab, the match panel for a matched leader has an "Open in Lead" button that opens that person's Lead profile (`{chmsBaseUrl}/goto/individuals/{individualId}`, configurable as `individualUrlTemplate`). The staff payload (`admin.leaders`) carries that URL as `leadUrl`, on matched rows and real data only. The URL contains the leader's Lead id; no bare id field is sent and nothing else about the person. Students' ids are still never sent, and coordinators and leaders get no `admin.leaders`, so never see it. Clearing a match asks to confirm in an in-app dialog. Decided 2026-11-24.
 - **Why:** Staff need to check who a row is matched to, and an automatic match that looks fine otherwise leaves the match panel as a dead end.
 - **Where:** `leaderAdminJson` in `src/api/me.ts`, `individualUrl` in `src/core/config.ts`, `matchPanel` and `confirmDialog` in `public/app.js`; `test/me.test.ts`, `test/links.test.ts`, `test/config.test.ts`.
+
+### 27. Follow-ups: everyone waiting, by queue and then by leader
+- **Decision:** The whole-queue list is called **Follow-ups** (it used to be called Behind) and shows every student who is Not Started or overdue, on purpose, grouped by queue (in Lead's order) and then by leader. A Not Started student with a due date next week is on it: they have not heard from anyone yet, so they are waiting on a follow-up even though they are not late. Pushes are unchanged and still fire only on day one and once a student is overdue (15 to 17). The tab is not called "Waiting" because the app already shows Waiting as a Lead status.
+- **Why:** Staff wanted to see which queues have a backlog and reach out to that queue's coordinator. "Behind" was the wrong word for a student who is not late.
+- **Where:** `followUpsView` in `public/app.js`; `admin.queues` in `src/api/me.ts` (the non-excluded queues in the viewer's scope, in Lead's order); `test/me.test.ts`. Who is on the list and who sees it are unchanged (9 to 13). Decided 2026-11-24.
 
 ## Operations
 

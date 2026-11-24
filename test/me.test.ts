@@ -111,7 +111,7 @@ describe('GET /api/me response', () => {
     // Coordinators get no link or match features at all.
     expect('leaders' in a).toBe(false);
     expect('leadPeople' in a).toBe(false);
-    expect(JSON.stringify(me)).not.toMatch(/\/l\/|"url"|token/i);
+    expect(JSON.stringify(me)).not.toMatch(/\/l\/|token/i);
     for (const i of [...a.unassigned, ...a.byLeader.flatMap((g) => g.items)]) expect(Object.keys(i.individual)).toEqual(['name', 'phone']);
   });
 
@@ -148,9 +148,58 @@ describe('GET /api/me response', () => {
     // A non-owner staff member cannot manage the owner's row.
     const asStaff = buildMe({ config: cfg, snapshot: snap, leader: staff, leaders, now: NOW });
     expect(asStaff.admin!.leaders!.find((l) => l.id === 9)!.canManage).toBe(false);
-    expect(JSON.stringify(me)).not.toMatch(/\/l\/|"url"|token|email/i);
+    expect(JSON.stringify(me)).not.toMatch(/\/l\/|token|"email"|@example\.com/i); // a queue may be called "Welcome Email": check the key, not the word
     const plain = buildMe({ config: cfg, snapshot: snap, leader: row({ chmsIndividualId: 'L101' }), leaders: [], now: NOW });
     expect('admin' in plain).toBe(false);
+  });
+});
+
+describe('admin.queues (the Follow-ups tab groups by these, in this order)', () => {
+  const live = config();
+  const three = {
+    queues: [queue({ id: 'q1', name: 'Outreach' }), queue({ id: 'q2', name: 'Service' }), queue({ id: 'q3', name: 'Bible Study' })],
+    entries: [entry({ id: 'a', queueId: 'q2', status: 'NOT_STARTED', assignee: lee })],
+    // The excluded queue is dropped from `queues` by loadSnapshot; its id is reserved so no key can reach it.
+    excludedQueueIds: ['qx'],
+  };
+  const adminQueues = (viewer: LeaderRow) => buildMe({ config: live, snapshot: three, leader: viewer, leaders: [viewer], now: NOW }).admin?.queues;
+
+  it('staff get every non-excluded queue, in Lead order, with a whole-queue link', () => {
+    const staff = row({ id: 1, name: 'Quinn', isAdmin: true });
+    expect(adminQueues(staff)).toEqual([
+      { id: 'q1', name: 'Outreach', url: 'https://example.com/step_individuals.php?ax=my&search_flag=1&step_id=q1&srch%5Bstatus_id%5D=&srch%5Bassigned%5D=all' },
+      { id: 'q2', name: 'Service', url: 'https://example.com/step_individuals.php?ax=my&search_flag=1&step_id=q2&srch%5Bstatus_id%5D=&srch%5Bassigned%5D=all' },
+      { id: 'q3', name: 'Bible Study', url: 'https://example.com/step_individuals.php?ax=my&search_flag=1&step_id=q3&srch%5Bstatus_id%5D=&srch%5Bassigned%5D=all' },
+    ]);
+  });
+
+  it('a coordinator gets only their queues, still in Lead order; a key naming an excluded queue grants nothing', () => {
+    const coordinator = (keys: string[]) => row({ id: 4, name: 'Cleo', coordinatorOf: keys });
+    expect(adminQueues(coordinator(['Bible Study', 'q1']))!.map((q) => q.id)).toEqual(['q1', 'q3']);
+    expect(adminQueues(coordinator(['Service']))!.map((q) => q.name)).toEqual(['Service']);
+    expect(adminQueues(coordinator(['qx']))).toBeUndefined();
+    expect(adminQueues(coordinator(['qx', 'q2']))!.map((q) => q.id)).toEqual(['q2']);
+  });
+
+  it('excluded queues are never listed, and a queue with nobody waiting is still listed', async () => {
+    const cfg = { ...loadConfig(), dataSource: 'pushpay' as const, audience: 'everyone' as const };
+    const snap = await loadSnapshot(createFixtureSource(NOW, cfg.timeZone), cfg);
+    const staff = row({ id: 9, name: 'Owner', isAdmin: true, isOwner: true });
+    const queues = buildMe({ config: cfg, snapshot: snap, leader: staff, leaders: [staff], now: NOW }).admin!.queues;
+    expect(queues.map((q) => q.name)).toEqual(snap.queues.map((q) => q.name));
+    expect(JSON.stringify(queues)).not.toMatch(/Not Interested|DONE/);
+    // A listed queue need not have anyone waiting (the app then names it in "Nothing waiting in").
+    expect(adminQueues(row({ id: 1, name: 'Quinn', isAdmin: true }))!.map((q) => q.id)).toContain('q1');
+  });
+
+  it('plain leaders and pre-launch callers get no admin key at all, so no queues', () => {
+    expect('admin' in buildMe({ config: live, snapshot: three, leader: row({ id: 5, chmsIndividualId: 'L1', name: 'Lee' }), leaders: [], now: NOW })).toBe(false);
+    const pre = buildMe({ config: config({ dataSource: 'fixture' }), snapshot: three, leader: row({ id: 6, name: 'Pat', coordinatorOf: ['Outreach'] }), leaders: [], now: NOW });
+    expect('admin' in pre).toBe(false);
+  });
+
+  it('carries no people: only id, name and url', () => {
+    for (const q of adminQueues(row({ id: 1, name: 'Quinn', isAdmin: true }))!) expect(Object.keys(q).sort()).toEqual(['id', 'name', 'url']);
   });
 });
 

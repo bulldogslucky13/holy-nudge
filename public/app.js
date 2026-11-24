@@ -245,13 +245,13 @@
   // Coordinators: one queue (11), two (14), one not matched to Lead yet (18), and staff who also coordinates (16).
   var mockLeadUrl = function () { return 'https://example.com/lead/individuals/0'; }; // harmless; the real one is built by the server
   var mockLeaders = [
-    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: ['Service Team'] },
+    { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: ['Sunday Morning Team'] },
     { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: [] },
     { id: 13, name: 'Quinn Adminson', hasLink: true, lastSeenAt: hoursAgo(0.2), notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: true, coordinates: [] },
     { id: 14, name: 'Sam Fakename', hasLink: true, lastSeenAt: hoursAgo(3), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: ['Connect Card Coordinators', 'Outreach Team'] },
     { id: 15, name: 'Riley Ownerperson', hasLink: true, lastSeenAt: hoursAgo(30), notificationsOn: true, isStaff: true, canManage: false, isYou: false, matched: false, coordinates: [] },
     { id: 16, name: 'Avery Placeholder', hasLink: true, lastSeenAt: hoursAgo(50), notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: true, coordinates: ['Staff'] },
-    { id: 17, name: 'Jordan Notreal', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false, coordinates: [] },
+    { id: 17, name: 'Jordan Notreal', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: false, coordinates: ['Outreach Team'] },
     { id: 18, name: 'Taylor Testwell', hasLink: true, lastSeenAt: hoursAgo(5), notificationsOn: true, isStaff: false, canManage: true, isYou: false, matched: false, coordinates: ['Bible Study Hosts & Events Team'] },
   ];
 
@@ -311,14 +311,41 @@
         mockItem('e11', 'q1', 'Connect Card Coordinators', 'NOT_STARTED', '2026-11-09', 8, 'Indigo Testperson', null, { hoursWaiting: 60 }),
         mockItem('e12', 'q2', 'Staff', 'NOT_STARTED', '2026-11-16', 1, 'Corey Sampleton', '405-555-0112', { hoursWaiting: 26 }),
         mockItem('e13', 'q1', 'Connect Card Coordinators', 'NOT_STARTED', null, null, 'Robin Notreal', '405-555-0113', { hoursWaiting: 0 }),
+        mockItem('e14', 'q3', 'Outreach Team', 'NOT_STARTED', '2026-11-30', null, 'Pell Mockwood', '405-555-0114', { hoursWaiting: 30 }),
       ];
+      // Everyone waiting on a follow-up, grouped by leader the way the server does (by name, nobody assigned last). A leader in
+      // two queues has students in both: Sam (Outreach and Bible Study). Sunday Morning Team has nobody waiting.
+      var q3 = 'Outreach Team', q4 = 'Bible Study Hosts & Events Team';
+      var byLeader = [
+        { leader: { name: 'Avery Placeholder' }, notificationsOn: false, items: [mockItem('e30', 'q2', 'Staff', 'IN_PROCESS', '2026-11-18', 4, 'Harper Imaginary', '405-555-0130'), mockItem('e33', 'q3', q3, 'NOT_STARTED', null, null, 'Marlow Dummy', '405-555-0133')] },
+        { leader: { name: 'Devon Mockford' }, notificationsOn: false, items: [mockItem('e20', 'q5', 'Service Team', 'WAITING', '2026-11-12', 5, 'Ash Fictional', '405-555-0120'), mockItem('e36', 'q5', 'Service Team', 'IN_PROCESS', '2026-11-20', 1, 'Arden Mockwell', '405-555-0136')] },
+        { leader: { name: 'Jordan Notreal' }, notificationsOn: false, items: [mockItem('e32', 'q3', q3, 'IN_PROCESS', '2026-11-19', 2, 'Ellis Pretend', '405-555-0132')] },
+        { leader: { name: 'Lee Madeup' }, notificationsOn: false, items: [mockItem('e31', 'q3', q3, 'NOT_STARTED', '2026-11-12', 9, 'Sage Fictionel', '405-555-0131')] },
+        { leader: { name: 'Sam Fakename' }, notificationsOn: true, items: [items[0], items[1], items[2]] },
+        { leader: { name: 'Taylor Testwell' }, notificationsOn: true, items: [mockItem('e34', 'q4', q4, 'WAITING', '2026-11-15', 6, 'Noor Inventa', '405-555-0134'), mockItem('e35', 'q4', q4, 'NOT_STARTED', '2026-11-29', null, 'Kit Madeup-Jones', null)] },
+        { leader: null, notificationsOn: false, items: unassigned },
+      ];
+      var queues = [
+        { id: 'q1', name: 'Connect Card Coordinators', url: 'https://example.com/queues/q1/all' },
+        { id: 'q2', name: 'Staff', url: 'https://example.com/queues/q2/all' },
+        { id: 'q3', name: q3, url: 'https://example.com/queues/q3/all' },
+        { id: 'q4', name: q4, url: 'https://example.com/queues/q4/all' },
+        { id: 'q5', name: 'Service Team', url: 'https://example.com/queues/q5/all' },
+        { id: 'q6', name: 'Sunday Morning Team', url: 'https://example.com/queues/q6/all' },
+      ];
+      if (manager) {
+        // A coordinator of one queue (Outreach Team) sees only that queue.
+        var mine = function (i) { return i.queueId === 'q3'; };
+        unassigned = unassigned.filter(mine);
+        byLeader = byLeader
+          .map(function (g) { return { leader: g.leader, notificationsOn: g.notificationsOn, items: g.items.filter(mine) }; })
+          .filter(function (g) { return g.items.length > 0; });
+        queues = queues.filter(function (q) { return q.id === 'q3'; });
+      }
       me.admin = {
         unassigned: unassigned,
-        byLeader: [
-          { leader: null, notificationsOn: false, items: unassigned },
-          { leader: { name: 'Sam Fakename' }, notificationsOn: true, items: items.slice(0, 2) },
-          { leader: { name: 'Devon Mockford' }, notificationsOn: false, items: [mockItem('e20', 'q5', 'Service Team', 'WAITING', '2026-11-12', 5, 'Ash Fictional', '405-555-0120')] },
-        ],
+        byLeader: byLeader,
+        queues: queues,
         leadersWithoutNotifications: [{ name: 'Devon Mockford' }, { name: 'Lee Madeup' }],
       };
       if (!manager) {
@@ -556,11 +583,13 @@
     matchNote: {}, // leader id -> short note after a match change ("Matched to ...")
     rf: 'idle', // the Refresh button the leader tapped: idle | busy (request or minimum time running) | done (tick showing)
     rfFresh: false, // the next header render plays the halo glow once (then false, so a tab switch does not replay it)
+    fu: { q: {}, g: {} }, // Follow-ups: what the viewer opened or closed by hand (queue id -> bool, queue+leader -> bool); memory only
     rfFailed: false, // the last tapped refresh failed: its note (text) shows under the header until one succeeds
   };
   if (mock) {
     var mockTab = query.get('tab');
-    if (mockTab === 'mine' || mockTab === 'unassigned' || mockTab === 'behind' || mockTab === 'team') S.tab = mockTab;
+    if (mockTab === 'behind') mockTab = 'followups'; // the tab's old name still works in a mock link
+    if (mockTab === 'mine' || mockTab === 'unassigned' || mockTab === 'followups' || mockTab === 'team') S.tab = mockTab;
     var mockMatch = Number(query.get('match'));
     if (mockMatch > 0) {
       S.tab = 'team';
@@ -1241,7 +1270,7 @@
     var tab = me.admin ? S.tab : 'mine';
     if (tab === 'mine') parts.push(mineView());
     else if (tab === 'unassigned') parts.push(unassignedView());
-    else if (tab === 'behind') parts.push(behindView());
+    else if (tab === 'followups') parts.push(followUpsView());
     else parts.push(teamView());
 
     parts.push(footer());
@@ -1289,7 +1318,7 @@
     var tabs = [
       { id: 'mine', label: 'Mine', n: S.me.behind.length },
       { id: 'unassigned', label: 'Unassigned', n: a.unassigned.length },
-      { id: 'behind', label: 'Behind', n: null },
+      { id: 'followups', label: 'Follow-ups', n: null },
       { id: 'team', label: 'Team', n: teamBadge() },
     ];
     return h(
@@ -1350,32 +1379,132 @@
     return h('div', {}, head, h('ul', { class: 'list' }, items.map(function (i) { return personCard(i, { waiting: true }); })));
   }
 
-  function behindView() {
-    var groups = S.me.admin.byLeader.slice().sort(function (a, b) {
-      if (!a.leader && b.leader) return 1; // unassigned group last
-      if (a.leader && !b.leader) return -1;
-      return 0;
+  /* ---------------------------------------------------------------- follow-ups (everyone waiting, by queue then leader) */
+
+  function waitingLine(items) {
+    var late = items.filter(function (i) { return typeof i.daysOverdue === 'number' && i.daysOverdue > 0; }).length;
+    return items.length + ' waiting' + (late ? ' · ' + late + ' overdue' : '');
+  }
+
+  /* "Name", "A and B", "A, B and C". */
+  function nameList(names) {
+    if (names.length < 2) return names.join('');
+    return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  }
+
+  /* admin.byLeader (leaders, each with students from any queue) turned into queues in Lead's order (admin.queues), each
+     with its own leader groups: a leader in two queues appears once in each, with only that queue's students. Only queues
+     with someone waiting get a section; the rest are named in `quiet`. */
+  function followUpQueues(a) {
+    var queues = (Array.isArray(a.queues) ? a.queues : []).map(function (q) { return { id: q.id, name: q.name, url: q.url, groups: [], items: [] }; });
+    var byId = {};
+    queues.forEach(function (q) { byId[q.id] = q; });
+    a.byLeader.forEach(function (g) {
+      g.items.forEach(function (i) {
+        var q = byId[i.queueId];
+        if (!q) { // not listed by the server: still show it rather than lose a student
+          q = byId[i.queueId] = { id: i.queueId, name: i.queueName || 'Queue', url: null, groups: [], items: [] };
+          queues.push(q);
+        }
+        var sub = q.groups.length ? q.groups[q.groups.length - 1] : null;
+        if (!sub || sub.src !== g) {
+          sub = { src: g, leader: g.leader, notificationsOn: g.notificationsOn, items: [] };
+          q.groups.push(sub);
+        }
+        sub.items.push(i);
+        q.items.push(i);
+      });
     });
-    var head = h('div', { class: 'hello' }, h('h2', {}, 'Everyone who’s behind'), h('p', { class: 'muted' }, 'Grouped by leader, so you know who to cheer on.'));
-    if (!groups.length) return h('div', {}, head, emptyState('Nobody is behind', 'Every queue is on track. Lovely.'));
-    return h(
-      'div',
-      {},
-      head,
-      h(
-        'div',
-        { class: 'list' },
-        groups.map(function (g) {
-          var name = g.leader ? g.leader.name : 'No leader yet';
-          return h(
-            'details',
-            { class: 'group', open: groups.length <= 3 },
-            h('summary', {}, h('span', { class: 'group-title' }, h('span', {}, name), h('span', { class: 'chip accent' }, g.items.length + ' ' + plural(g.items.length, 'student', 'students')), g.leader && g.notificationsOn === false ? h('span', { class: 'chip' }, 'notifications off') : null)),
-            h('ul', { class: 'list' }, g.items.map(function (i) { return personCard(i); }))
-          );
-        })
-      )
+    queues.forEach(function (q) {
+      q.groups.sort(function (x, y) { // as before: by the server's order, nobody assigned last
+        if (!x.leader && y.leader) return 1;
+        if (x.leader && !y.leader) return -1;
+        return 0;
+      });
+    });
+    return {
+      shown: queues.filter(function (q) { return q.items.length > 0; }),
+      quiet: queues.filter(function (q) { return q.items.length === 0; }),
+      inView: queues.length,
+    };
+  }
+
+  /* Open or closed: what the viewer chose this session, else the default. Remembered in S.fu, so a Refresh keeps it. */
+  function fuState(bucket, key, dflt) {
+    return Object.prototype.hasOwnProperty.call(S.fu[bucket], key) ? S.fu[bucket][key] : dflt;
+  }
+
+  function coordinatorLine(a, q) {
+    if (!Array.isArray(a.leaders)) return null; // coordinators have no leaders list, and see only their own queue
+    var names = a.leaders
+      .filter(function (l) { return Array.isArray(l.coordinates) && l.coordinates.indexOf(q.name) !== -1; })
+      .map(function (l) { return l.name; });
+    if (!names.length) return h('p', { class: 'fu-coord muted small' }, 'No coordinator marked');
+    return h('p', { class: 'fu-coord small' }, h('span', { class: 'muted' }, names.length === 1 ? 'Coordinator: ' : 'Coordinators: '), h('strong', {}, nameList(names)));
+  }
+
+  function followUpGroup(q, g, openByDefault) {
+    var key = q.id + '\u0001' + (g.leader ? g.leader.name : '');
+    var name = g.leader ? g.leader.name : 'No leader yet';
+    var d = h(
+      'details',
+      { class: 'group', open: fuState('g', key, openByDefault) },
+      h('summary', {}, h('span', { class: 'group-title' }, h('span', {}, name), h('span', { class: 'chip accent' }, g.items.length + ' ' + plural(g.items.length, 'student', 'students')), g.leader && g.notificationsOn === false ? h('span', { class: 'chip' }, 'notifications off') : null)),
+      h('ul', { class: 'list' }, g.items.map(function (i) { return personCard(i); }))
     );
+    d.addEventListener('toggle', function () {
+      if (d.open !== fuState('g', key, openByDefault)) S.fu.g[key] = d.open; // only a hand change is remembered
+    });
+    return d;
+  }
+
+  function followUpSection(a, q, collapsible, openByDefault) {
+    var open = collapsible ? fuState('q', q.id, openByDefault) : true;
+    var bodyId = 'fu-body-' + q.id.replace(/[^A-Za-z0-9_-]/g, '_');
+    var titleKids = [h('span', { class: 'fu-name' }, q.name), h('span', { class: 'fu-count small' }, waitingLine(q.items))];
+    var head;
+    var body;
+    if (collapsible) {
+      // Opened and closed in place (no re-render), so keyboard focus stays on the button; S.fu keeps it across a Refresh.
+      head = h(
+        'button',
+        {
+          class: 'fu-toggle',
+          type: 'button',
+          'aria-expanded': open ? 'true' : 'false',
+          'aria-controls': bodyId,
+          onclick: function () {
+            var now = head.getAttribute('aria-expanded') !== 'true';
+            head.setAttribute('aria-expanded', now ? 'true' : 'false');
+            body.hidden = !now;
+            S.fu.q[q.id] = now;
+          },
+        },
+        h('span', { class: 'fu-title' }, titleKids),
+        h('span', { class: 'fu-chevron', 'aria-hidden': 'true' })
+      );
+    } else {
+      head = h('div', { class: 'fu-toggle static' }, h('h3', { class: 'fu-title' }, titleKids));
+    }
+    var leadersHere = q.groups.length;
+    var openLeaders = leadersHere <= 3;
+    body = h('div', { class: 'fu-body', id: bodyId, hidden: !open }, h('div', { class: 'list' }, q.groups.map(function (g) { return followUpGroup(q, g, openLeaders); })));
+    var coord = coordinatorLine(a, q);
+    var link = q.url ? h('a', { class: 'fu-link small', href: q.url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Open ' + q.name + ' in ChMS' }, 'Open queue in ChMS') : null;
+    return h('section', { class: 'fu-queue' }, head, coord || link ? h('div', { class: 'fu-meta' }, coord, link) : null, body);
+  }
+
+  function followUpsView() {
+    var a = S.me.admin;
+    var v = followUpQueues(a);
+    var byQueue = Array.isArray(a.leaders) || v.inView > 1;
+    var head = h('div', { class: 'hello' }, h('h2', {}, 'Waiting on a follow-up'), h('p', { class: 'muted' }, byQueue ? 'By queue, then by leader, so you know who to cheer on.' : 'By leader, so you know who to cheer on.'));
+    if (!v.shown.length) return h('div', {}, head, emptyState('Nobody is waiting on a follow-up', 'Every queue is cared for. Lovely.'));
+    // Several queues in view: each section can be opened and closed, and starts closed (unless it is the only one with anyone waiting).
+    var collapsible = v.inView > 1;
+    var sections = v.shown.map(function (q) { return followUpSection(a, q, collapsible, v.shown.length === 1); });
+    var quiet = v.quiet.length ? h('p', { class: 'muted small fu-quiet' }, 'Nothing waiting in: ' + v.quiet.map(function (q) { return q.name; }).join(', ') + '.') : null;
+    return h('div', {}, head, h('div', { class: 'list' }, sections), quiet);
   }
 
   /* People who have a working link but have not turned on notifications: the ones worth a friendly reminder. */
