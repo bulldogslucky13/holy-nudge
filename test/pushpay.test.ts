@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { resolveMe } from '../src/api/me';
 import {
   ChmsApiError,
   ChmsDataError,
@@ -8,13 +9,18 @@ import {
   mapDueDate,
   mapEntry,
   mapPerson,
+  MAX_PHONE_LOOKUPS,
+  pickPhone,
   PushpayDataSource,
   toCount,
   type PushpayOptions,
 } from '../src/chms/pushpay';
 import { dueToDate } from '../src/core/time';
+import { runDailyJob } from '../src/job/daily';
+import { loadSnapshot } from '../src/job/load';
 import { importTokenKey, sealToken } from '../src/chms/tokenbox';
-import { TEST_TOKEN_KEY } from './helpers';
+import { FakeSender, FakeStore } from './fakes';
+import { config, TEST_TOKEN_KEY } from './helpers';
 import { createTestD1 } from './sqlite-d1';
 
 const TZ = 'America/Chicago';
@@ -22,15 +28,15 @@ const API = 'https://api.test';
 type Json = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
-// A fake Pushpay API. All names, emails and numbers are invented.
+// A fake Pushpay API, shaped like production on 2026-11-24. All names, emails and numbers are invented.
 
 interface FakeApi {
   queues: Json[];
   details: Record<string, Json>;
   entries: Json[];
   individuals: Record<string, Json>;
-  /** Ignore queue_ids[] like a server that does not support it. */
-  ignoreQueueFilter: boolean;
+  /** Ignore process_ids[] and queue_ids[] on /queues_individuals like a server that does not support them. */
+  ignoreFilters: boolean;
   /** Hide entries assigned to anyone but this id (simulates "only what the user can see"). */
   visibleAssignee: string | null;
   pagingHeaders: boolean;
@@ -49,6 +55,8 @@ let clockMs: number;
 let sleeps: number[];
 let logs: string[];
 
+const OPEN = ['NOT_STARTED', 'IN_PROCESS', 'WAITING'];
+
 function entryRow(i: number, queueId: number, status: string, over: Json = {}): Json {
   return {
     queue_individual_id: 900000 + i,
@@ -65,23 +73,39 @@ function entryRow(i: number, queueId: number, status: string, over: Json = {}): 
       first_name: 'Student',
       last_name: String(i),
       email: `student${i}@example.com`,
-      phone: { mobile: `555-01${String(i % 100).padStart(2, '0')}`, home: '', work: '' },
-      preferred_number: 'MOBILE',
+      phone: {}, // production: always an empty object on queue rows
     },
-    assignee: i % 3 === 0 ? null : { id: i % 2 ? 801 : 802, name: i % 2 ? 'Leader One' : 'Leader Two' },
+    assignee: i % 3 === 0 ? null : { id: i % 2 ? 801 : 802, name: i % 2 ? 'Leader One' : 'Leader Two', phone: {} },
     ...over,
   };
 }
 
+/** A GET /individuals/{id} body stuffed with fields that must never leave the data source. */
+function individualBody(id: number, phone: Json = {}): Json {
+  return {
+    id,
+    first_name: 'Secret',
+    last_name: 'Person',
+    email: `secret${id}@example.com`,
+    addresses: [{ street_address: '1 Secret Way', city: 'Hiddenville' }],
+    giving_number: 'GIVING-SECRET',
+    allergies: 'ALLERGY-SECRET',
+    custom_fields: [{ label: 'Notes', value: 'CUSTOM-SECRET' }],
+    phone: { emergency: '+15550191', fax: '+15550192', home: '', mobile: `+1555${String(id).slice(-6)}`, pager: '+15550193', work: '', ...phone },
+    preferred_number: 'mobile',
+  };
+}
+
+const SECRETS = /Secret Way|Hiddenville|GIVING-SECRET|ALLERGY-SECRET|CUSTOM-SECRET|secret\d+@|\+15550191|\+15550192|\+15550193|@example\.com/;
+
 function countsFor(queueId: number): Json {
-  const rows = api.entries.filter((e) => e.queue_id === queueId);
+  const rows = api.entries.filter((e) => e.queue_id === queueId && OPEN.includes(String(e.status)));
   const n = (s: string) => rows.filter((e) => e.status === s).length;
   return {
     not_started: n('NOT_STARTED'),
     in_process: n('IN_PROCESS'),
     waiting: n('WAITING'),
-    done: n('DONE'),
-    unassigned: rows.filter((e) => e.assignee === null && e.status !== 'DONE').length,
+    unassigned: rows.filter((e) => e.assignee === null).length,
     overdue: 0,
   };
 }
@@ -98,6 +122,8 @@ function page<T>(rows: T[], url: URL): Response {
     : {};
   return Response.json(slice, { headers });
 }
+
+const processOf = (queueId: unknown) => String(api.queues.find((q) => q.id === queueId)?.process_id);
 
 const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const raw = String(input);
@@ -120,11 +146,15 @@ const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return Response.json(api.statusCounts ? { ...d, status_counts: d.status_counts ?? countsFor(Number(m[1])) } : d);
   }
   if (path === '/queues_individuals') {
-    expect(raw).toContain('statuses[]=NOT_STARTED&statuses[]=IN_PROCESS&statuses[]=WAITING&statuses[]=DONE');
+    // The snapshot asks for the open statuses only, never DONE.
+    expect(raw).toContain('statuses[]=NOT_STARTED&statuses[]=IN_PROCESS&statuses[]=WAITING&per_page=');
+    expect(raw).not.toContain('DONE');
     const statuses = url.searchParams.getAll('statuses[]');
     const qids = url.searchParams.getAll('queue_ids[]');
+    const pids = url.searchParams.getAll('process_ids[]');
     let rows = api.entries.filter((e) => statuses.includes(String(e.status)));
-    if (qids.length && !api.ignoreQueueFilter) rows = rows.filter((e) => qids.includes(String(e.queue_id)));
+    if (qids.length && !api.ignoreFilters) rows = rows.filter((e) => qids.includes(String(e.queue_id)));
+    if (pids.length && !api.ignoreFilters) rows = rows.filter((e) => pids.includes(processOf(e.queue_id)));
     if (api.visibleAssignee) {
       rows = rows.filter((e) => e.assignee === null || String((e.assignee as Json).id) === api.visibleAssignee);
     }
@@ -166,32 +196,35 @@ beforeEach(() => {
   tokenRequests = [];
   const entries: Json[] = [];
   const statuses = ['NOT_STARTED', 'IN_PROCESS', 'WAITING', 'DONE'];
-  for (let i = 0; i < 130; i++) entries.push(entryRow(i, 5001, statuses[i % 4]!));
-  for (let i = 130; i < 140; i++) entries.push(entryRow(i, 5002, 'NOT_STARTED'));
-  entries.push(entryRow(140, 6001, 'NOT_STARTED')); // another process
+  // 5001: 180 rows, 45 DONE, 135 open (two pages of open rows on its own).
+  for (let i = 0; i < 180; i++) entries.push(entryRow(i, 5001, statuses[i % 4]!));
+  // 5002: 10 open rows, 3 of them unassigned.
+  for (let i = 200; i < 210; i++) entries.push(entryRow(i, 5002, 'NOT_STARTED'));
+  entries.push(entryRow(210, 6001, 'NOT_STARTED')); // another process
   api = {
     queues: [
-      { id: 5002, process_id: 37, name: 'Outreach Team', order_by: 2, managers: [], assigned_count: 7 },
+      { id: 5002, process_id: 37, name: 'Outreach Team', order_by: 2, managers: [], queue_managers: [] },
       {
         id: 5001,
         process_id: 37,
         name: 'Connect Card Coordinators',
         order_by: 1,
-        managers: [{ id: 801, name: 'Leader One', email: 'leader1@example.com', phone: { mobile: '555-0199' } }],
+        managers: [{ id: 801, name: 'Leader One', email: 'leader1@example.com', phone: {} }],
+        queue_managers: [{ id: 803, name: 'Leader Three' }],
       },
       { id: 6001, process_id: 99, name: 'Other process', order_by: 1 },
     ],
     details: {
       '5001': { id: 5001, name: 'Connect Card Coordinators', managers: [{ id: 801, name: 'Leader One' }, { id: 803, name: 'Leader Three' }] },
       '5002': { id: 5002, name: 'Outreach Team', managers: [] },
-      '6001': { id: 6001, name: 'Other process', managers: [] },
+      '6001': { id: 6001, name: 'Other process', managers: [{ id: 804, name: 'Leader Four' }] },
     },
     entries,
     individuals: {},
-    ignoreQueueFilter: false,
+    ignoreFilters: false,
     visibleAssignee: null,
     pagingHeaders: true,
-    statusCounts: true,
+    statusCounts: false,
     xTotal: null,
     requests: [],
     auth: [],
@@ -200,37 +233,53 @@ beforeEach(() => {
 });
 
 const paths = () => api.requests.map((u) => u.pathname);
+const entryReads = () => api.requests.filter((u) => u.pathname === '/queues_individuals');
 
 // ---------------------------------------------------------------------------
 
 describe('listQueues', () => {
-  it('lists the process queues in ChMS order with managers from the queue detail', async () => {
+  it('lists the process queues in ChMS order with managers from the list rows, id and name only', async () => {
     const queues = await source().listQueues('37');
     expect(queues.map((q) => [q.id, q.name, q.processId])).toEqual([
       ['5001', 'Connect Card Coordinators', '37'],
       ['5002', 'Outreach Team', '37'],
     ]);
-    expect(queues[0]!.managers).toEqual([
-      { id: '801', name: 'Leader One', email: 'leader1@example.com', phone: '555-0199' },
-      { id: '803', name: 'Leader Three' },
-    ]);
+    expect(queues[0]!.managers).toEqual([{ id: '801', name: 'Leader One' }]); // `managers` wins over `queue_managers`
     expect(queues[1]!.managers).toEqual([]);
     expect(String(api.requests[0])).toBe(`${API}/queues?process_ids[]=37&per_page=100&page=1`);
-    expect(paths()).toEqual(['/queues', '/queues/5001', '/queues/5002']);
+    expect(paths()).toEqual(['/queues']); // no GET /queues/{id}
     expect(api.auth.every((a) => a === 'Bearer access-0')).toBe(true);
+  });
+
+  it('uses queue_managers when managers is missing, and the detail only when neither is an array', async () => {
+    api.queues = [
+      { id: 5001, process_id: 37, name: 'A', order_by: 1, queue_managers: [{ id: 803, name: 'Leader Three' }] },
+      { id: 5002, process_id: 37, name: 'B', order_by: 2, managers: null },
+      { id: 6001, process_id: 37, name: 'C', order_by: 3 },
+    ];
+    const queues = await source().listQueues('37');
+    expect(queues.map((q) => q.managers)).toEqual([[{ id: '803', name: 'Leader Three' }], [], [{ id: '804', name: 'Leader Four' }]]);
+    expect(paths()).toEqual(['/queues', '/queues/5002', '/queues/6001']);
   });
 });
 
 describe('listEntries', () => {
-  it('asks for all four statuses, pages to the end, and maps every field', async () => {
-    const entries = await source().listEntries('5001');
-    expect(entries).toHaveLength(130);
-    const pages = api.requests.filter((u) => u.pathname === '/queues_individuals').map((u) => u.searchParams.get('page'));
-    expect(pages).toEqual(['1', '2']);
-    expect(String(api.requests.find((u) => u.pathname === '/queues_individuals'))).toContain('queue_ids[]=5001');
-    expect(new Set(entries.map((e) => e.status))).toEqual(new Set(['NOT_STARTED', 'IN_PROCESS', 'WAITING', 'DONE']));
+  it('reads the open statuses once for the whole process, pages to the end, and maps every field', async () => {
+    const ds = source();
+    await ds.listQueues('37');
+    const a = await ds.listEntries('5001');
+    const b = await ds.listEntries('5002');
+    expect(a).toHaveLength(135);
+    expect(b).toHaveLength(10);
+    expect(entryReads().map((u) => [u.searchParams.getAll('process_ids[]'), u.searchParams.get('page')])).toEqual([
+      [['37'], '1'],
+      [['37'], '2'],
+    ]);
+    expect(entryReads().some((u) => u.searchParams.has('queue_ids[]'))).toBe(false);
+    expect(new Set(a.map((e) => e.status))).toEqual(new Set(OPEN));
+    expect(paths()).toEqual(['/queues', '/queues_individuals', '/queues_individuals']); // 3 calls for the snapshot
 
-    const first = entries.find((e) => e.id === '900001')!;
+    const first = a.find((e) => e.id === '900001')!;
     expect(first).toEqual({
       id: '900001',
       queueId: '5001',
@@ -239,108 +288,84 @@ describe('listEntries', () => {
       created: '2026-11-01',
       completed: null,
       assignee: { id: '801', name: 'Leader One' },
-      individual: { id: '70001', name: 'Student 1', email: 'student1@example.com', phone: '555-0101' },
+      individual: { id: '70001', name: 'Student 1', email: 'student1@example.com' }, // phone: {} -> none
     });
-    expect(entries.find((e) => e.id === '900000')!.assignee).toBeNull();
-    expect(entries.find((e) => e.id === '900003')!.completed).toBe('2026-11-12');
+    expect(a.find((e) => e.id === '900000')!.assignee).toBeNull();
   });
 
   it('stops on a short page when no paging headers are sent, including an exact-multiple last page', async () => {
     api.pagingHeaders = false;
-    api.entries = api.entries.filter((e) => e.queue_id !== 5001 || Number(e.queue_individual_id) < 900100);
-    expect(await source().listEntries('5001')).toHaveLength(100);
-    const pages = api.requests.filter((u) => u.pathname === '/queues_individuals').map((u) => u.searchParams.get('page'));
-    expect(pages).toEqual(['1', '2']); // page 2 is empty
-  });
-
-  it('filters client-side and reads once per run when the server ignores queue_ids[]', async () => {
-    api.ignoreQueueFilter = true;
+    api.statusCounts = true; // the only thing left to verify against
+    api.queues = api.queues.map((q) => ({ ...q, managers: null, queue_managers: null }));
+    api.entries = api.entries.filter((e) => e.queue_id === 5001 && Number(e.queue_individual_id) < 900132); // 99 open
+    api.entries.push(entryRow(300, 5001, 'WAITING')); // exactly 100 open rows in the process
     const ds = source();
     await ds.listQueues('37');
-    const a = await ds.listEntries('5001');
-    const b = await ds.listEntries('5002');
-    expect(a.every((e) => e.queueId === '5001')).toBe(true);
-    expect(a).toHaveLength(130);
-    expect(b).toHaveLength(10);
-    const listCalls = api.requests.filter((u) => u.pathname === '/queues_individuals');
-    // first try with queue_ids[] (2 pages), then one process-wide read (2 pages), reused for 5002
-    expect(listCalls.map((u) => u.searchParams.has('queue_ids[]'))).toEqual([true, true, false, false]);
-    expect(listCalls[2]!.searchParams.getAll('process_ids[]')).toEqual(['37']);
-    expect(logs.some((l) => l.includes('queue_ids[] filter was ignored'))).toBe(true);
+    expect(await ds.listEntries('5001')).toHaveLength(100);
+    expect(entryReads().map((u) => u.searchParams.get('page'))).toEqual(['1', '2']); // page 2 is empty
+  });
+
+  it('reads one queue with queue_ids[] when no process is known', async () => {
+    const rows = await source().listEntries('5002');
+    expect(rows).toHaveLength(10);
+    expect(entryReads().map((u) => u.searchParams.getAll('queue_ids[]'))).toEqual([['5002']]);
+  });
+
+  it('keeps only its own queue, verified against the whole read, when queue_ids[] is ignored', async () => {
+    api.ignoreFilters = true;
+    const rows = await source().listEntries('5002');
+    expect(rows).toHaveLength(10);
+    expect(rows.every((e) => e.queueId === '5002')).toBe(true);
   });
 
   it('throws IncompleteDataError when the rows do not add up to the queue counts', async () => {
     // Only status_counts can catch this: x-total counts what the server chose to return.
-    // Production sends no status_counts (2026-11-24), so this guards a future API version.
+    // Production sends no status_counts (2026-11-24), so this guards a future API version;
+    // production was seen returning rows assigned to other people (16 distinct open assignees).
+    api.statusCounts = true;
+    api.queues = api.queues.map((q) => ({ ...q, managers: null, queue_managers: null })); // detail calls, to get counts
     api.visibleAssignee = '801'; // the API hides rows assigned to other leaders
-    const err = await source().listEntries('5001').catch((e) => e);
+    const ds = source();
+    await ds.listQueues('37');
+    const err = await ds.listEntries('5001').catch((e) => e);
     expect(err).toBeInstanceOf(IncompleteDataError);
     expect(err.queueId).toBe('5001');
-    expect(err.message).toMatch(/not_started: expected 33, got \d+/);
+    expect(err.message).toMatch(/not_started: expected 45, got \d+/);
     expect(err.message).not.toMatch(/Student|example\.com|555-/);
-    // it re-read once before giving up
+    // it re-read once before giving up, with a fresh detail since this API sends counts
     expect(api.requests.filter((u) => u.pathname === '/queues/5001')).toHaveLength(2);
   });
 
-  it('accepts counts that settle on the re-read (someone worked the queue mid-run)', async () => {
-    let detailCalls = 0;
-    api.intercept = (url) => {
-      if (url.pathname === '/queues/5002' && ++detailCalls === 1) {
-        return Response.json({ id: 5002, managers: [], status_counts: { not_started: 11, in_process: 0, waiting: 0, done: 0 } });
-      }
-      return undefined;
-    };
-    expect(await source().listEntries('5002')).toHaveLength(10);
-  });
-
   it('refuses to verify against nothing', async () => {
-    api.statusCounts = false;
     api.pagingHeaders = false;
     await expect(source().listEntries('5002')).rejects.toBeInstanceOf(IncompleteDataError);
   });
 
   it('rejects unknown statuses loudly', async () => {
     api.intercept = (url) =>
-      url.pathname === '/queues_individuals' ? Response.json([entryRow(200, 5002, 'ARCHIVED')]) : undefined;
+      url.pathname === '/queues_individuals' ? Response.json([entryRow(200, 5002, 'ARCHIVED')], { headers: { 'x-total': '1' } }) : undefined;
     await expect(source().listEntries('5002')).rejects.toBeInstanceOf(ChmsDataError);
   });
 
-  it('only fetches per-individual contacts when the option is on', async () => {
-    for (const e of api.entries) if (e.queue_id === 5002) (e.individual as Json).phone = null;
-    api.entries.push(entryRow(141, 5002, 'DONE', { individual: { id: 70141, name: 'Done Person' } }));
-    for (let i = 130; i < 139; i++) api.individuals[String(70000 + i)] = { id: 70000 + i, phone: { mobile: '' } };
-    api.individuals['70130'] = { id: 70130, name: 'Student 130', phone: { mobile: '', home: '555-0177' }, preferred_number: 'HOME' };
-    // 70139 is missing (404): tolerated, the entry just has no phone.
-
-    const off = await source().listEntries('5002');
-    expect(off.every((e) => e.individual.phone === undefined)).toBe(true);
+  it('never asks for a phone while reading the snapshot', async () => {
+    const ds = source();
+    await loadSnapshot(ds, config({ dataSource: 'pushpay' }));
     expect(paths().some((p) => p.startsWith('/individuals/'))).toBe(false);
-
-    api.requests = [];
-    const on = await source({ fetchContactsPerIndividual: true }).listEntries('5002');
-    expect(on.find((e) => e.individual.id === '70130')!.individual.phone).toBe('555-0177');
-    expect(on.find((e) => e.individual.id === '70139')!.individual.phone).toBeUndefined();
-    const individualCalls = paths().filter((p) => p.startsWith('/individuals/'));
-    expect(individualCalls).toHaveLength(10); // the 10 open entries, not the DONE one
-    expect(individualCalls).not.toContain('/individuals/70141');
   });
 });
 
 describe('listEntries against production-shaped responses (2026-11-24)', () => {
   // No status_counts, no assigned_count, unassigned_count a string or null, x-total on every page.
   const realQueues = (unassigned: Record<string, string | null>) => {
-    api.statusCounts = false;
-    api.queues = api.queues.map(({ assigned_count: _drop, ...q }) => ({ ...q, unassigned_count: unassigned[String(q.id)] ?? null }));
+    api.queues = api.queues.map((q) => ({ ...q, unassigned_count: unassigned[String(q.id)] ?? null }));
   };
-  const entryReads = () => api.requests.filter((u) => u.pathname === '/queues_individuals');
 
-  it('passes on a multi-page queue verified by x-total and a string unassigned_count', async () => {
-    realQueues({ '5001': '33', '5002': '3' }); // 5001: 33 open unassigned of 44; 5002: 3 of 3
+  it('passes on a multi-page read verified by x-total and a string unassigned_count (open reading)', async () => {
+    realQueues({ '5001': '45', '5002': '3' });
     const ds = source();
     await ds.listQueues('37');
-    expect(await ds.listEntries('5001')).toHaveLength(130);
+    expect(await ds.listEntries('5001')).toHaveLength(135);
     expect(await ds.listEntries('5002')).toHaveLength(10);
-    expect(entryReads().map((u) => u.searchParams.get('page'))).toEqual(['1', '2', '1']);
     expect(logs).toEqual([]);
   });
 
@@ -351,13 +376,13 @@ describe('listEntries against production-shaped responses (2026-11-24)', () => {
     await ds.listQueues('37');
     const err = await ds.listEntries('5001').catch((e) => e);
     expect(err).toBeInstanceOf(IncompleteDataError);
-    expect(err.message).toContain('rows: x-total 131, received 130');
+    expect(err.message).toContain('process-wide read: x-total 146, received 145');
     expect(err.message).not.toMatch(/Student|example\.com|555-|900\d{3}|70\d{3}/);
     expect(entryReads()).toHaveLength(4); // two pages, twice
     expect(logs.some((l) => l.includes('re-reading once'))).toBe(true);
   });
 
-  it('recovers when the re-read adds up', async () => {
+  it('recovers when the re-read adds up, and later queues use the fresh read', async () => {
     realQueues({});
     let reads = 0;
     api.xTotal = (real, url) => {
@@ -367,13 +392,16 @@ describe('listEntries against production-shaped responses (2026-11-24)', () => {
     const ds = source();
     await ds.listQueues('37');
     expect(await ds.listEntries('5002')).toHaveLength(10);
-    expect(entryReads()).toHaveLength(2);
+    expect(await ds.listEntries('5001')).toHaveLength(135);
+    expect(entryReads()).toHaveLength(4);
   });
 
   it('treats x-total changing between pages as a mismatch', async () => {
     realQueues({});
     api.xTotal = (real, url) => (url.pathname === '/queues_individuals' && url.searchParams.get('page') === '2' ? real + 1 : real);
-    const err = await source().listEntries('5001').catch((e) => e);
+    const ds = source();
+    await ds.listQueues('37');
+    const err = await ds.listEntries('5001').catch((e) => e);
     expect(err).toBeInstanceOf(IncompleteDataError);
     expect(err.message).toContain('x-total changed between pages');
   });
@@ -383,15 +411,17 @@ describe('listEntries against production-shaped responses (2026-11-24)', () => {
     // The list shifted by one between pages: page 2 repeats the last row of page 1.
     api.intercept = (url) => {
       if (url.pathname !== '/queues_individuals' || url.searchParams.get('page') !== '2') return undefined;
-      const rows = api.entries.filter((e) => e.queue_id === 5001);
-      return Response.json(rows.slice(99, 129), { headers: { 'x-total': '130', 'x-total-pages': '2', 'x-per-page': '100', 'x-page': '2' } });
+      const rows = api.entries.filter((e) => processOf(e.queue_id) === '37' && OPEN.includes(String(e.status)));
+      return Response.json(rows.slice(99, 144), { headers: { 'x-total': '145', 'x-total-pages': '2', 'x-per-page': '100', 'x-page': '2' } });
     };
-    const err = await source().listEntries('5001').catch((e) => e);
+    const ds = source();
+    await ds.listQueues('37');
+    const err = await ds.listEntries('5001').catch((e) => e);
     expect(err).toBeInstanceOf(IncompleteDataError);
-    expect(err.message).toContain('rows: 1 duplicate rows across pages');
+    expect(err.message).toContain('process-wide read: 1 duplicate rows across pages');
   });
 
-  it('still fails closed with unassigned_count null, no paging headers and no counts', async () => {
+  it('still fails closed with unassigned_count null, no paging header and no counts', async () => {
     realQueues({ '5002': null });
     api.pagingHeaders = false;
     const ds = source();
@@ -401,13 +431,13 @@ describe('listEntries against production-shaped responses (2026-11-24)', () => {
     expect(err.message).toContain('no counts available to verify against');
   });
 
-  it('reads unassigned_count "5" as a number and reports it when the rows disagree', async () => {
-    realQueues({ '5002': '5' }); // the rows have 3 unassigned
+  it('reads unassigned_count "5" as a number and reports it when the open rows disagree', async () => {
+    realQueues({ '5002': '5' }); // the rows have 3 open unassigned
     const ds = source();
     await ds.listQueues('37');
     const err = await ds.listEntries('5002').catch((e) => e);
     expect(err).toBeInstanceOf(IncompleteDataError);
-    expect(err.message).toContain('unassigned_count: expected 5, got 3 open / 3 total');
+    expect(err.message).toContain('unassigned_count: expected 5, got 3 open');
     // the re-read refreshed the queue list once
     expect(paths().filter((p) => p === '/queues')).toHaveLength(2);
   });
@@ -421,24 +451,134 @@ describe('listEntries against production-shaped responses (2026-11-24)', () => {
     expect(paths().filter((p) => p === '/queues')).toHaveLength(2);
   });
 
-  it('verifies the process-wide fallback read against its own total, not per queue', async () => {
+  it('verifies the process-wide read against its own total, never a single queue', async () => {
     realQueues({});
-    api.ignoreQueueFilter = true;
+    api.ignoreFilters = true; // process_ids[] ignored too: the read also holds process 99's row
     const ds = source();
     await ds.listQueues('37');
-    expect(await ds.listEntries('5001')).toHaveLength(130); // x-total of the read is 141, the whole read
+    expect(await ds.listEntries('5001')).toHaveLength(135); // x-total of the read is 146, the whole read
     expect(await ds.listEntries('5002')).toHaveLength(10);
-    expect(entryReads().map((u) => u.searchParams.has('queue_ids[]'))).toEqual([true, true, false, false]);
+    expect(entryReads()).toHaveLength(2);
+  });
+});
 
-    api.requests = [];
-    const ds2 = source();
-    await ds2.listQueues('37');
-    api.xTotal = (real, url) => (url.pathname === '/queues_individuals' && !url.searchParams.has('queue_ids[]') ? real - 1 : real);
-    const err = await ds2.listEntries('5002').catch((e) => e);
-    expect(err).toBeInstanceOf(IncompleteDataError);
-    expect(err.message).toContain('process-wide read: x-total 140, received 141');
-    // the process-wide read was repeated for the re-read
-    expect(entryReads().filter((u) => !u.searchParams.has('queue_ids[]'))).toHaveLength(4);
+describe('phonesFor', () => {
+  it('reads only the phone from a stuffed /individuals/{id} body, and fetches nothing else', async () => {
+    api.individuals['70001'] = individualBody(70001);
+    api.individuals['70002'] = individualBody(70002, { mobile: '', home: '+15550102' });
+    (api.individuals['70002'] as Json).preferred_number = 'home';
+    api.individuals['70003'] = individualBody(70003, { mobile: '' }); // preferred mobile, empty: none
+    const phones = await source().phonesFor(['70001', '70002', '70003', '70001']);
+    expect([...phones]).toEqual([
+      ['70001', '+155570001'],
+      ['70002', '+15550102'],
+    ]);
+    expect(paths()).toEqual(['/individuals/70001', '/individuals/70002', '/individuals/70003']);
+  });
+
+  it('never fails: 404, 500, non-JSON and network errors just mean no phone, logged without ids', async () => {
+    api.individuals['70001'] = individualBody(70001);
+    api.intercept = (url) => {
+      if (url.pathname === '/individuals/70002') return new Response('', { status: 500 });
+      if (url.pathname === '/individuals/70003') return new Response('not json', { status: 200 });
+      if (url.pathname === '/individuals/70005') throw new TypeError('network down');
+      return undefined;
+    };
+    const phones = await source().phonesFor(['70001', '70002', '70003', '70004', '70005']);
+    expect([...phones.keys()]).toEqual(['70001']);
+    expect(logs.join('\n')).not.toMatch(/700\d\d|Secret/);
+    expect(logs.some((l) => l.includes('4 phone lookups failed'))).toBe(true);
+  });
+
+  it(`looks up at most ${MAX_PHONE_LOOKUPS} people; the rest get no phone`, async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => String(71000 + i));
+    for (const id of ids) api.individuals[id] = individualBody(Number(id));
+    const phones = await source().phonesFor(ids);
+    expect(phones.size).toBe(MAX_PHONE_LOOKUPS);
+    expect(paths()).toHaveLength(MAX_PHONE_LOOKUPS);
+    expect(phones.has(ids[MAX_PHONE_LOOKUPS]!)).toBe(false);
+  });
+});
+
+describe('phones in /api/me and the daily job', () => {
+  const liveCfg = config({ dataSource: 'pushpay', excludedQueues: [] });
+  const now = () => new Date(clockMs);
+  const stuffAll = () => {
+    for (const e of api.entries) {
+      const id = Number((e.individual as Json).id);
+      api.individuals[String(id)] = individualBody(id);
+    }
+  };
+
+  it("a leader's page looks up phones for their own students only, and the payload carries nothing else", async () => {
+    stuffAll();
+    const store = new FakeStore();
+    store.addLeader({ chmsIndividualId: '802', name: 'Leader Two' });
+    const leader = (await store.listLeaders())[0]!;
+    api.entries = api.entries.filter((e) => e.queue_id === 5002); // Leader Two: 4 own students in 5002
+    const ds = source();
+    const r = await resolveMe({ store, config: liveCfg, leader, now: now(), loadSnapshot: () => loadSnapshot(ds, liveCfg), loadPhones: (ids) => ds.phonesFor(ids) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.me.behind).toHaveLength(4);
+    for (const item of r.me.behind) expect(Object.keys(item.individual).sort()).toEqual(['name', 'phone']);
+    expect(r.me.behind.map((i) => i.individual.phone).sort()).toEqual(['+155570200', '+155570202', '+155570206', '+155570208']);
+    expect(JSON.stringify(r.me)).not.toMatch(SECRETS);
+    expect(paths().filter((p) => p.startsWith('/individuals/')).sort()).toEqual(['/individuals/70200', '/individuals/70202', '/individuals/70206', '/individuals/70208']);
+    expect(r.me.admin).toBeUndefined();
+  });
+
+  it('caps one page view and returns the rest without a phone', async () => {
+    stuffAll();
+    const store = new FakeStore();
+    store.addLeader({ chmsIndividualId: '801', name: 'Leader One' });
+    const leader = (await store.listLeaders())[0]!;
+    const ds = source();
+    const r = await resolveMe({ store, config: liveCfg, leader, now: now(), loadSnapshot: () => loadSnapshot(ds, liveCfg), loadPhones: (ids) => ds.phonesFor(ids) });
+    if (!r.ok) throw new Error('expected ok');
+    expect(r.me.behind).toHaveLength(33);
+    expect(r.me.behind.filter((i) => i.individual.phone)).toHaveLength(MAX_PHONE_LOOKUPS);
+    expect(r.me.behind.slice(0, MAX_PHONE_LOOKUPS).every((i) => i.individual.phone)).toBe(true); // the top of the list
+    expect(paths().filter((p) => p.startsWith('/individuals/'))).toHaveLength(MAX_PHONE_LOOKUPS);
+  });
+
+  it('a staff whole-queue view looks up no phones and its cards have none', async () => {
+    stuffAll();
+    const store = new FakeStore();
+    store.addLeader({ name: 'Staff', isAdmin: true });
+    const leader = (await store.listLeaders())[0]!;
+    const ds = source();
+    let asked: string[] | null = null;
+    const r = await resolveMe({
+      store, config: liveCfg, leader, now: now(), loadSnapshot: () => loadSnapshot(ds, liveCfg),
+      loadPhones: async (ids) => { asked = ids; return ds.phonesFor(ids); },
+    });
+    if (!r.ok) throw new Error('expected ok');
+    expect(asked).toBeNull();
+    expect(r.me.admin!.unassigned.length).toBeGreaterThan(0);
+    expect(r.me.admin!.unassigned.every((i) => i.individual.phone === null)).toBe(true);
+    expect(r.me.admin!.byLeader.flatMap((g) => g.items).every((i) => i.individual.phone === null)).toBe(true);
+    expect(paths().some((p) => p.startsWith('/individuals/'))).toBe(false);
+  });
+
+  it('a failed lookup never fails the page', async () => {
+    const store = new FakeStore();
+    store.addLeader({ chmsIndividualId: '802', name: 'Leader Two' });
+    const leader = (await store.listLeaders())[0]!;
+    const ds = source();
+    const r = await resolveMe({ store, config: liveCfg, leader, now: now(), loadSnapshot: () => loadSnapshot(ds, liveCfg), loadPhones: async () => { throw new Error('boom'); } });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.me.behind.every((i) => i.individual.phone === null)).toBe(true);
+  });
+
+  it('the daily job makes zero /individuals calls', async () => {
+    stuffAll();
+    const store = new FakeStore();
+    store.addLeader({ chmsIndividualId: '801', name: 'Leader One' }, 1);
+    store.addLeader({ name: 'Owner', isAdmin: true, isOwner: true }, 1);
+    const out = await runDailyJob({ config: liveCfg, store, sender: new FakeSender(), dataSource: () => source(), now: now(), force: true });
+    expect(out.ran).toBe(true);
+    expect(paths()).toEqual(['/queues', '/queues_individuals', '/queues_individuals']);
   });
 });
 
@@ -467,13 +607,14 @@ describe('HTTP behaviour', () => {
   });
 
   it('throttles each endpoint to the documented 1 request per second after the burst', async () => {
-    const ds = source({ rateLimit: { perSecond: 1, burst: 2 } });
+    const ds = source({ rateLimit: { perSecond: 1, burst: 1 } });
     const start = clockMs;
-    await ds.listQueues('37'); // /queues once, then /queues/{id} twice
-    await ds.listEntries('5002'); // /queues/{id} cached, /queues_individuals once
-    await ds.listEntries('5001'); // /queues_individuals twice more
-    // /queues_individuals: 3 calls with burst 2 -> one wait of 1 s. /queues/{id}: 2 calls, no wait.
+    await ds.listQueues('37'); // /queues once (managers come from the list rows)
+    await ds.listEntries('5002'); // the process-wide read: /queues_individuals twice (two pages)
+    await ds.listEntries('5001'); // shared read, no request
+    // /queues_individuals: 2 calls with burst 1 -> one wait of 1 s. /queues: 1 call, no wait.
     expect(clockMs - start).toBe(1000);
+    expect(paths()).toEqual(['/queues', '/queues_individuals', '/queues_individuals']);
   });
 
   it('waits until x-ratelimit-reset when the server says nothing remains', async () => {
@@ -544,6 +685,17 @@ describe('due dates', () => {
 });
 
 describe('people', () => {
+  it('reads the production /individuals/{id} phone shape: mobile, else the preferred number, never emergency/fax/pager', () => {
+    const phone = (over: Json) => ({ emergency: '+15550191', fax: '+15550192', home: '', mobile: '', pager: '+15550193', work: '', ...over });
+    expect(pickPhone({ phone: phone({ mobile: '+15550101', home: '+15550102' }), preferred_number: 'home' })).toBe('+15550101');
+    expect(pickPhone({ phone: phone({ home: '+15550102' }), preferred_number: 'home' })).toBe('+15550102');
+    expect(pickPhone({ phone: phone({ work: '+15550103' }), preferred_number: 'Work' })).toBe('+15550103');
+    expect(pickPhone({ phone: phone({ home: '+15550102' }), preferred_number: 'mobile' })).toBeUndefined();
+    expect(pickPhone({ phone: phone({}), preferred_number: 'emergency' })).toBeUndefined();
+    expect(pickPhone({ phone: phone({}) })).toBeUndefined();
+    expect(pickPhone({ phone: {} as never, preferred_number: 'mobile' })).toBeUndefined(); // queue rows
+  });
+
   it('prefers mobile, then the preferred number, and omits empty contact fields', () => {
     expect(mapPerson({ id: 1, name: 'A', phone: { mobile: '555-0101', home: '555-0102' }, preferred_number: 'HOME' })!.phone).toBe('555-0101');
     expect(mapPerson({ id: 1, name: 'A', phone: { mobile: ' ', work: '555-0103' }, preferred_number: 'WORK' })!.phone).toBe('555-0103');
@@ -562,12 +714,12 @@ describe('people', () => {
 describe('completenessMismatches', () => {
   const e = (status: string, assigned: boolean) =>
     mapEntry({ ...entryRow(Math.floor(Math.random() * 1e6), 1, status), assignee: assigned ? { id: 9, name: 'X' } : null } as never);
-  it('accepts unassigned counts with or without DONE entries', () => {
+  it('reads every count as an open-only count (DONE is not fetched)', () => {
     const entries = [e('NOT_STARTED', false), e('DONE', false), e('WAITING', true)];
-    const base = { not_started: 1, in_process: 0, waiting: 1, done: 1 };
+    const base = { not_started: 1, in_process: 0, waiting: 1, done: 99 }; // done is never compared
     expect(completenessMismatches(entries, { ...base, unassigned: 1 })).toEqual([]);
-    expect(completenessMismatches(entries, { ...base, unassigned: 2 })).toEqual([]);
-    expect(completenessMismatches(entries, { ...base, unassigned: 3 })).toHaveLength(1);
+    expect(completenessMismatches(entries, { ...base, unassigned: 2 })).toEqual(['unassigned: expected 2, got 1 open']);
+    expect(completenessMismatches(entries, base, { unassigned_count: '1', assigned_count: 1 })).toEqual([]);
     expect(completenessMismatches(entries, base, { assigned_count: 2 })).toHaveLength(1);
   });
 

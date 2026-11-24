@@ -123,6 +123,11 @@ Each entry says what was decided, why, and where it is enforced. No real people'
 - **Decision:** `dataSource` stays `fixture` (invented sample data) until the Master Admin has approved the app and Cameron says to switch. While it is `fixture`, only the owner gets push notifications (decided 2026-11-21: nobody else should be nudged about invented students); other staff can still open the app and see the sample data, and nobody else sees anything. Once live, everyone is nudged as the timing rules say. The invented sample people never become leader rows (no daily-job or page-view sync, no matching); leader rows exist only for people added by hand until real data is connected. Decided 2026-11-20.
 - **Where:** `config/holy-nudge.config.json`, `src/job/daily.ts`, `src/api/me.ts`, `test/prelaunch.test.ts`.
 
+### 24. Phone numbers only for a leader's own students
+- **Decision:** Phone numbers are looked up only for the students on the viewer's own list ("Mine"), one person at a time, at most 25 per page view, when the page is opened. Staff and coordinators browsing a whole queue see no phone numbers there and use "Open in ChMS". The daily job never looks up phones. Only the number is read from Lead's person record; nothing else from it is kept, logged or sent. Decided 2026-11-24, for speed and least access; open to revisiting.
+- **Why:** Lead does not include phone numbers with queue rows, so each number costs its own request, limited to one per second. Looking up every student in a queue would make whole-queue pages slow, and the person's own students are the ones they text.
+- **Where:** `phonesFor` in `src/chms/pushpay.ts`, `addOwnPhones` in `src/api/me.ts`, `functions/api/me.ts`; `test/pushpay.test.ts` ("phones in /api/me and the daily job").
+
 ## Operations
 
 ### 23. No branch preview deployments

@@ -56,8 +56,13 @@ interface QueueEntry {            // one person in one queue
 interface DataSource {
   listQueues(processId: string): Promise<Queue[]>;
   listEntries(queueId: string): Promise<QueueEntry[]>;
+  phonesFor?(individualIds: readonly string[]): Promise<Map<string, string>>;
 }
 ```
+
+The snapshot (`loadSnapshot`, used by the daily job and every page view) holds open entries only: the live source asks for Not Started, In Process and Waiting in one process-wide read and never reads DONE, which no rule uses. Live, that is the `/queues` list plus one or two pages of entries.
+
+Lead sends no phone numbers with queue rows. `phonesFor` looks them up one person at a time (`GET /individuals/{id}`, at most 25 per call) and is used only by `GET /api/me` for the viewer's own list ("Mine"); never by the daily job, never for whole-queue views, whose cards then have no Text/Call buttons (decision 24). Only the picked number leaves the data source. The sample-data source has no `phonesFor`: its rows already carry invented numbers.
 
 The live implementation maps Pushpay responses into these types; nothing outside `src/chms/` knows the API's shapes. A later Workflows implementation is another `DataSource`.
 
@@ -108,7 +113,7 @@ Student data is never stored in D1; views fetch it live through the DataSource (
 
 - Push payloads: counts only. No student names, phones, or emails.
 - Logs: counts, queue ids, stage, reason and error class names only. Never error messages from upstream (they can echo ChMS values), never names, contact details, tokens or secrets. The cron worker catches every failure and logs one fixed line; `/api/*` and `/oauth/*` have an error-boundary middleware that logs the route and error class only.
-- `GET /api/me` sends student name and phone only (no email).
+- `GET /api/me` sends student name and phone only (no email). Live, a phone is present only on the viewer's own students (decision 24).
 - Fixtures: invented names, `555-01xx` phone numbers, `example.com` emails.
 
 ## Routes (Pages Functions)
