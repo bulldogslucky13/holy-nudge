@@ -33,6 +33,7 @@ export function config(over: Partial<HolyNudgeConfig> = {}): HolyNudgeConfig {
     followUpDays: 7,
     firstTextHours: 72,
     dataSource: 'fixture',
+    audience: 'staff',
     chmsBaseUrl: 'https://example.com',
     ...over,
   };

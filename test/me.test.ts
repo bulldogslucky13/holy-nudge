@@ -8,7 +8,7 @@ import { parseSubscription } from '../src/push/subscription';
 import { config as baseConfig, entry, person, queue } from './helpers';
 
 // Real data connected: the pre-launch gate is off, so these tests exercise the normal views.
-const config = (over: Parameters<typeof baseConfig>[0] = {}) => baseConfig({ dataSource: 'pushpay', ...over });
+const config = (over: Parameters<typeof baseConfig>[0] = {}) => baseConfig({ dataSource: 'pushpay', audience: 'everyone', ...over });
 
 const NOW = new Date('2026-01-15T14:00:00Z');
 const row = (over: Partial<LeaderRow>): LeaderRow => ({
@@ -116,7 +116,7 @@ describe('GET /api/me response', () => {
   });
 
   it('staff (is_admin) see every queue and the leader list (no links); non-admins get no admin key', async () => {
-    const cfg = { ...loadConfig(), dataSource: 'pushpay' as const }; // live, but with the fixture snapshot as sample rows
+    const cfg = { ...loadConfig(), dataSource: 'pushpay' as const, audience: 'everyone' as const }; // live, but with the fixture snapshot as sample rows
     const snap = await loadSnapshot(createFixtureSource(NOW, cfg.timeZone), cfg);
     const owner = row({ id: 9, name: 'Owner', isAdmin: true, isOwner: true, lastSeenAt: '2026-01-15T13:00:00.000Z', subscriptionCount: 1 });
     const staff = row({ id: 4, name: 'Staffer', isAdmin: true });

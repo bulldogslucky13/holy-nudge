@@ -12,7 +12,7 @@ import { FakeSender, FakeStore } from './fakes';
 import { config, entry, person, queue, TEST_TOKEN_KEY } from './helpers';
 
 // Live: the data source is injected below, and the pre-launch rules (fixture config) have their own tests.
-const cfg = config({ excludedQueues: ['Not Interested'], dataSource: 'pushpay' });
+const cfg = config({ excludedQueues: ['Not Interested'], dataSource: 'pushpay', audience: 'everyone' });
 const NOW = new Date('2026-01-15T14:00:00Z'); // 08:00 CST
 
 const lee = person('L1', 'Lee');
@@ -244,7 +244,7 @@ describe('daily job', () => {
     });
     it('treats pushpay without credentials as a data-source failure with its own alert', async () => {
       const { store, sender } = setup();
-      const pp = config({ dataSource: 'pushpay' });
+      const pp = config({ dataSource: 'pushpay', audience: 'everyone' });
       await expect(
         runDailyJob({ config: pp, store, sender, dataSource: () => createDataSource(pp, {} as never, NOW), now: NOW }),
       ).rejects.toThrow(/not_configured, ChmsNotConfiguredError/);
@@ -255,7 +255,7 @@ describe('daily job', () => {
     it('sends the re-approval alert when pushpay has never been approved (no refresh token in D1)', async () => {
       const { store, sender, ids } = setup();
       const t = await createTestD1('migrations/0002_oauth.sql');
-      const pp = config({ dataSource: 'pushpay' });
+      const pp = config({ dataSource: 'pushpay', audience: 'everyone' });
       const env = { DB: t.db, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', TOKEN_ENC_KEY: TEST_TOKEN_KEY };
       const calls: string[] = [];
       vi.stubGlobal('fetch', async (u: RequestInfo | URL) => {
@@ -300,7 +300,7 @@ describe('daily job', () => {
     }
 
     it('treats pushpay with credentials but no valid TOKEN_ENC_KEY as not configured (never plaintext)', async () => {
-      const pp = config({ dataSource: 'pushpay' });
+      const pp = config({ dataSource: 'pushpay', audience: 'everyone' });
       for (const key of [undefined, '', 'short', 'a'.repeat(44)]) {
         const { store, sender } = setup();
         const env = { DB: {} as D1Database, CHMS_CLIENT_ID: 'c', CHMS_CLIENT_SECRET: 's', TOKEN_ENC_KEY: key };

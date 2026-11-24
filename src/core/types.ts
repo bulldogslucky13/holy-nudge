@@ -41,6 +41,9 @@ export interface DataSource {
 
 export type DataSourceKind = 'fixture' | 'pushpay';
 
+/** Who real data is released to: "staff" (is_admin rows only, the cautious first stage) or "everyone". */
+export type Audience = 'staff' | 'everyone';
+
 export interface HolyNudgeConfig {
   processId: string;
   /** Queues to ignore entirely; each item matches a queue id or an exact queue name. */
@@ -57,6 +60,11 @@ export interface HolyNudgeConfig {
   /** Hours an unassigned student may wait (for the coordinators' first text) before the summary nudges daily. */
   firstTextHours: number;
   dataSource: DataSourceKind;
+  /**
+   * Who sees real data and is nudged once dataSource is not "fixture" (docs/DECISIONS.md, 25). Ignored
+   * while the data is sample data. Absent in the file means "staff".
+   */
+  audience: Audience;
   /** Base URL for deep links into ChMS. */
   chmsBaseUrl: string;
   /**

@@ -350,7 +350,7 @@ describe('listEntries', () => {
 
   it('never asks for a phone while reading the snapshot', async () => {
     const ds = source();
-    await loadSnapshot(ds, config({ dataSource: 'pushpay' }));
+    await loadSnapshot(ds, config({ dataSource: 'pushpay', audience: 'everyone' }));
     expect(paths().some((p) => p.startsWith('/individuals/'))).toBe(false);
   });
 });
@@ -502,7 +502,7 @@ describe('phonesFor', () => {
 });
 
 describe('phones in /api/me and the daily job', () => {
-  const liveCfg = config({ dataSource: 'pushpay', excludedQueues: [] });
+  const liveCfg = config({ dataSource: 'pushpay', audience: 'everyone', excludedQueues: [] });
   const now = () => new Date(clockMs);
   const stuffAll = () => {
     for (const e of api.entries) {

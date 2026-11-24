@@ -120,13 +120,18 @@ Each entry says what was decided, why, and where it is enforced. No real people'
 - **Where:** `src/chms/oauth.ts` scopes. Original brief.
 
 ### 22. Sample data until the church approves
-- **Decision:** `dataSource` stays `fixture` (invented sample data) until the Master Admin has approved the app and Cameron says to switch. While it is `fixture`, only the owner gets push notifications (decided 2026-11-21: nobody else should be nudged about invented students); other staff can still open the app and see the sample data, and nobody else sees anything. Once live, everyone is nudged as the timing rules say. The invented sample people never become leader rows (no daily-job or page-view sync, no matching); leader rows exist only for people added by hand until real data is connected. Decided 2026-11-20.
+- **Decision:** `dataSource` stays `fixture` (invented sample data) until the Master Admin has approved the app and Cameron says to switch. While it is `fixture`, only the owner gets push notifications (decided 2026-11-21: nobody else should be nudged about invented students); other staff can still open the app and see the sample data, and nobody else sees anything. Once real data is on, who sees it and is nudged is decided by `audience` (see 25). The invented sample people never become leader rows (no daily-job or page-view sync, no matching); leader rows exist only for people added by hand until real data is connected. Decided 2026-11-20.
 - **Where:** `config/holy-nudge.config.json`, `src/job/daily.ts`, `src/api/me.ts`, `test/prelaunch.test.ts`.
 
 ### 24. Phone numbers only for a leader's own students
 - **Decision:** Phone numbers are looked up only for the students on the viewer's own list ("Mine"), one person at a time, at most 25 per page view, when the page is opened. Staff and coordinators browsing a whole queue see no phone numbers there and use "Open in ChMS". The daily job never looks up phones. Only the number is read from Lead's person record; nothing else from it is kept, logged or sent. Decided 2026-11-24, for speed and least access; open to revisiting.
 - **Why:** Lead does not include phone numbers with queue rows, so each number costs its own request, limited to one per second. Looking up every student in a queue would make whole-queue pages slow, and the person's own students are the ones they text.
 - **Where:** `phonesFor` in `src/chms/pushpay.ts`, `addOwnPhones` in `src/api/me.ts`, `functions/api/me.ts`; `test/pushpay.test.ts` ("phones in /api/me and the daily job").
+
+### 25. Real data goes to staff first, then to everyone
+- **Decision:** When real data is switched on, it is released in two stages, controlled by `audience` in the config. `"staff"` (the default): only staff (`is_admin` rows, the owner included) see students and get notifications. A coordinator who is not staff is not staff here: they see the same "you're all set" screen as before launch. `"everyone"`: everyone sees data and is nudged by the normal access rules (9 to 13) and timing rules (15 to 19). While `dataSource` is `fixture`, `audience` is ignored and 22 applies. Leader rows are still created and matched to Lead in both stages. Push subscriptions are never touched: someone who turned notifications on earlier simply starts receiving when the audience becomes `everyone`. Decided 2026-11-24.
+- **Why:** Most open students are already overdue, so the first real morning would nudge nearly every leader at once. Staff check the numbers against Lead first, then the owner opens it up.
+- **Where:** `leaderAccess` in `src/core/config.ts`, used by `src/api/me.ts` and `src/job/daily.ts`; `test/audience.test.ts`.
 
 ## Operations
 

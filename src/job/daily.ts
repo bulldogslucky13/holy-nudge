@@ -4,7 +4,7 @@ import { ChmsNotConfiguredError } from '../chms/oauth';
 import { IncompleteDataError } from '../chms/pushpay';
 import { ReauthorizationRequired, TokenPersistError } from '../chms/tokens';
 import { computeNudges, FIRST_RUN_LOOKBACK_MS, isNewSinceLastRun, isOverdue, isPastFirstText, ownTriggered, summaryTriggered, type RunWindow } from '../core/behind';
-import { isLive } from '../core/config';
+import { isLive, leaderAccess } from '../core/config';
 import { HOUR_MS } from '../core/time';
 import { errorClassName } from '../core/errors';
 import type { DataSource, HolyNudgeConfig } from '../core/types';
@@ -117,11 +117,9 @@ export async function runDailyJob(deps: JobDeps): Promise<JobOutcome> {
     /** People whose push was due but reached none of their devices (temporary failure): retried next run. */
     let undelivered = 0;
 
-    // Until real data is connected, everything computed above is about made-up sample students. Only the
-    // owner may be nudged about it (docs/DECISIONS.md, 22): other staff, coordinators and volunteers must
-    // never get "3 students are waiting on you" about invented people. Everyone is nudged once live.
-    const live = isLive(config);
-    const mayNudge = (row: { isOwner: boolean }) => live || row.isOwner;
+    // Who may be nudged at all (docs/DECISIONS.md, 22 and 25): on sample data only the owner; on real data
+    // staff only until the audience is "everyone". Own-students pushes and both kinds of summary follow it.
+    const mayNudge = (row: { isAdmin: boolean; isOwner: boolean }) => leaderAccess(config, row).getsPush;
 
     // Their own students waiting, per leader row, and whether any of them is due a push this morning.
     const own = new Map<number, { count: number; fires: boolean }>();
