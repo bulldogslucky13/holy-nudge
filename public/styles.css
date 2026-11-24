@@ -29,6 +29,7 @@
   --done: #68866f;        /* the done mark */
   --on-done: #ffffff;
   --warn: #98522a;        /* muted clay: overdue line and real errors only */
+  --on-warn: #ffffff;
   --wm-holy: #29303e;
   --wm-nudge: #68866f;
   --radius: 18px;
@@ -54,6 +55,7 @@
     --done: #9db8a3;
     --on-done: #1b2029;
     --warn: #e6ad7e;
+    --on-warn: #1b2029;
     --wm-holy: #ffffff;
     --wm-nudge: #9db8a3;
     --shadow: 0 0 0 transparent; /* not "none": it is used inside shadow lists */
@@ -160,6 +162,12 @@ a { color: var(--accent-text); }
   background: var(--primary);
   border-color: var(--primary);
   color: var(--on-primary);
+}
+
+.btn.danger {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: var(--on-warn);
 }
 
 .btn.big {
@@ -647,6 +655,62 @@ button.match-icon::after { content: ""; position: absolute; inset: -14px; }
 .match-panel > .status-line:empty, .match-form > .status-line:empty, .chosen-line:empty { display: none; }
 .match-form .text-input { width: 100%; }
 .match-form > .field-label { margin-top: 4px; }
+
+/* A matched row: one clear action, the rest quiet. */
+.match-lines { display: grid; gap: 2px; }
+.match-lines p { margin: 0; }
+.match-panel .btn.open-lead { width: 100%; }
+.match-more > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.match-more > summary::-webkit-details-marker { display: none; }
+.match-more > summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin: 0 12px 2px 4px;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+.match-more[open] > summary::before { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .match-more > summary::before { transition: none; } }
+.match-more > summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.match-more > .match-form { padding-top: 4px; }
+.match-quiet {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 2px;
+}
+.match-quiet .btn.link { padding: 0 6px; }
+.btn.link.warn { color: var(--warn); text-decoration-color: var(--warn); }
+
+/* ---------- confirm dialog (native <dialog>) ---------- */
+
+dialog.confirm {
+  width: min(calc(100vw - 32px), 380px);
+  padding: 0; /* the inner box pads, so a click on the dialog element itself is a click on the backdrop */
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+dialog.confirm::backdrop { background: rgba(27, 32, 41, 0.6); }
+.confirm-inner { display: grid; gap: 10px; padding: 22px 20px 18px; }
+.confirm-title { margin: 0; font-size: 1.1rem; line-height: 1.3; }
+.confirm-body { margin: 0; color: var(--muted); }
+.confirm-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 8px; }
 
 /* radio rows: one person each */
 .person-set { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }

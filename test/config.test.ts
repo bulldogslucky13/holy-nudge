@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, parseConfig, queueUrl, adminQueueUrl } from '../src/core/config';
+import { ConfigError, loadConfig, parseConfig, queueUrl, adminQueueUrl, individualUrl } from '../src/core/config';
 
 describe('config', () => {
   it('bundled config loads with the spec defaults', () => {
@@ -50,6 +50,18 @@ describe('config', () => {
     const custom = parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q/{queueId}' });
     expect(queueUrl(custom, 'a b')).toBe('https://wildwood.ccbchurch.com/q/a%20b');
     expect(() => parseConfig({ ...ok, queueUrlTemplate: '{chmsBaseUrl}/q' })).toThrow(/queueUrlTemplate/);
+  });
+
+  it('builds Lead profile URLs from the default or a configured template', () => {
+    const ok = loadConfig();
+    expect('individualUrlTemplate' in ok).toBe(false); // the default is right, so the bundled file leaves it out
+    expect(individualUrl(ok, '12345')).toBe('https://wildwood.ccbchurch.com/goto/individuals/12345');
+    expect(individualUrl(ok, 'a b/c?d')).toBe('https://wildwood.ccbchurch.com/goto/individuals/a%20b%2Fc%3Fd');
+    const custom = parseConfig({ ...ok, individualUrlTemplate: '{chmsBaseUrl}/people/{individualId}/view' });
+    expect(individualUrl(custom, '77')).toBe('https://wildwood.ccbchurch.com/people/77/view');
+    expect(() => parseConfig({ ...ok, individualUrlTemplate: '{chmsBaseUrl}/people' })).toThrow(/individualUrlTemplate/);
+    expect(() => parseConfig({ ...ok, individualUrlTemplate: '{chmsBaseUrl}/people/{queueId}' })).toThrow(/individualUrlTemplate/);
+    expect(() => parseConfig({ ...ok, individualUrlTemplate: 5 })).toThrow(/individualUrlTemplate/);
   });
 
   it('builds admin queue links filtered by status across all assignees', () => {

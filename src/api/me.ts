@@ -1,7 +1,7 @@
 // Builds the GET /api/me response (docs/ARCHITECTURE.md "JSON contract").
 import { computeNudges, queueIdsForKeys, type AdminResult } from '../core/behind';
 import { availableLeadPeople } from '../core/match';
-import { adminQueueUrl, isLive, leaderAccess, queueUrl } from '../core/config';
+import { adminQueueUrl, individualUrl, isLive, leaderAccess, queueUrl } from '../core/config';
 import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from '../core/time';
 import type { HolyNudgeConfig, Queue, QueueEntry, Status } from '../core/types';
 import { errorClassName } from '../core/errors';
@@ -37,8 +37,13 @@ export interface LeaderAdminJson {
   /** False for the owner's row unless the viewer is the owner (only the owner rotates or turns off an owner link). */
   canManage: boolean;
   isYou: boolean;
-  /** Tied to a Lead (ChMS) person, so once live they see that person's students. The id itself is not sent. */
+  /** Tied to a Lead (ChMS) person, so once live they see that person's students. No bare id field is sent. */
   matched: boolean;
+  /**
+   * That person's Lead profile URL (it contains their Lead id: a deliberate, narrow exception, docs/DECISIONS.md, 26).
+   * Present only when matched and real data is on; absent otherwise. Staff only, since only staff get `leaders`.
+   */
+  leadUrl?: string;
   /**
    * Names of the (non-excluded) queues this row coordinates, i.e. the whole queues they see, in queue order.
    * Keys that match no queue in the current data are left out: they grant nothing. Read-only.
@@ -90,7 +95,13 @@ export function canManageLink(actor: Pick<LeaderRow, 'isAdmin' | 'isOwner'>, tar
   return actor.isAdmin && (!target.isOwner || actor.isOwner);
 }
 
-export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow, queues: readonly Queue[] = [], reservedIds: readonly string[] = []): LeaderAdminJson {
+export function leaderAdminJson(
+  l: LeaderRow,
+  viewer: LeaderRow,
+  config: HolyNudgeConfig,
+  queues: readonly Queue[] = [],
+  reservedIds: readonly string[] = [],
+): LeaderAdminJson {
   const names = new Map(queues.map((q) => [q.id, q.name]));
   return {
     id: l.id,
@@ -102,6 +113,7 @@ export function leaderAdminJson(l: LeaderRow, viewer: LeaderRow, queues: readonl
     canManage: canManageLink(viewer, l),
     isYou: l.id === viewer.id,
     matched: l.chmsIndividualId !== null,
+    ...(l.chmsIndividualId !== null && isLive(config) ? { leadUrl: individualUrl(config, l.chmsIndividualId) } : {}),
     coordinates: queueIdsForKeys(queues, l.coordinatorOf, reservedIds).map((id) => names.get(id)!),
   };
 }
@@ -212,7 +224,7 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
     };
     // Link management is for staff (is_admin) only, never for coordinators.
     if (leader.isAdmin) {
-      out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader, snapshot.queues, snapshot.excludedQueueIds)).sort(byName);
+      out.admin.leaders = leaders.map((l) => leaderAdminJson(l, leader, config, snapshot.queues, snapshot.excludedQueueIds)).sort(byName);
       // Empty on sample data: its people are invented and have no rows, so offering them would only fail (docs/DECISIONS.md, 22).
       out.admin.leadPeople = isLive(config) ? availableLeadPeople(leaders, peopleSeen(snapshot)) : [];
     }

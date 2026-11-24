@@ -130,6 +130,8 @@ describe('GET /api/me response', () => {
       { id: 9, name: 'Owner', hasLink: true, lastSeenAt: '2026-01-15T13:00:00.000Z', notificationsOn: true, isStaff: true, canManage: true, isYou: true, matched: false, coordinates: [] },
       { id: 4, name: 'Staffer', hasLink: true, lastSeenAt: null, notificationsOn: false, isStaff: true, canManage: true, isYou: false, matched: false, coordinates: [] },
     ]);
+    // No row is matched, so no Lead profile URL for anyone.
+    expect(JSON.stringify(me.admin!.leaders)).not.toMatch(/leadUrl|goto/);
     // Every Lead person seen is free to match here (no row holds any of them).
     expect(me.admin!.leadPeople!.length).toBeGreaterThan(5);
     for (const p of me.admin!.leadPeople!) expect(Object.keys(p)).toEqual(['id', 'name']);
@@ -149,6 +151,48 @@ describe('GET /api/me response', () => {
     expect(JSON.stringify(me)).not.toMatch(/\/l\/|"url"|token|email/i);
     const plain = buildMe({ config: cfg, snapshot: snap, leader: row({ chmsIndividualId: 'L101' }), leaders: [], now: NOW });
     expect('admin' in plain).toBe(false);
+  });
+});
+
+describe("a leader's Lead profile URL (docs/DECISIONS.md, 26)", () => {
+  const live = config({ chmsBaseUrl: 'https://church.example' });
+  const sample = { ...live, dataSource: 'fixture' as const };
+  const staff = row({ id: 1, name: 'Quinn', isAdmin: true, chmsIndividualId: 'P-1' });
+  const matched = row({ id: 2, name: 'Casey', chmsIndividualId: 'P 2/x' });
+  const unmatched = row({ id: 3, name: 'Drew' });
+  const everyone = [staff, matched, unmatched];
+  const forLeaders = (cfg: typeof live, viewer: LeaderRow) => buildMe({ config: cfg, snapshot, leader: viewer, leaders: everyone, now: NOW }).admin?.leaders;
+
+  it('staff get it for matched rows on real data, built from the template and encoded; nothing else about the person', () => {
+    const leaders = forLeaders(live, staff)!;
+    expect(leaders.find((l) => l.id === 2)!.leadUrl).toBe('https://church.example/goto/individuals/P%202%2Fx');
+    expect(leaders.find((l) => l.id === 1)!.leadUrl).toBe('https://church.example/goto/individuals/P-1');
+    for (const l of leaders) {
+      // No bare id field of any kind, only the URL.
+      expect(Object.keys(l).filter((k) => /chms|individual/i.test(k))).toEqual([]);
+      expect(Object.keys(l)).not.toContain('id' + 'Lead');
+    }
+    const custom = forLeaders({ ...live, individualUrlTemplate: '{chmsBaseUrl}/people/{individualId}' }, staff)!;
+    expect(custom.find((l) => l.id === 2)!.leadUrl).toBe('https://church.example/people/P%202%2Fx');
+  });
+
+  it('is absent for unmatched rows and on sample data', () => {
+    expect('leadUrl' in forLeaders(live, staff)!.find((l) => l.id === 3)!).toBe(false);
+    for (const l of forLeaders(sample, staff)!) expect('leadUrl' in l).toBe(false);
+    expect(JSON.stringify(forLeaders(sample, staff))).not.toMatch(/goto|P-1/);
+  });
+
+  it('never reaches coordinators or plain leaders (they get no admin.leaders), nor students', () => {
+    const coordinator = row({ id: 4, name: 'Cleo', chmsIndividualId: 'P-4', coordinatorOf: ['Outreach'] });
+    for (const viewer of [coordinator, matched]) {
+      const me = buildMe({ config: live, snapshot, leader: viewer, leaders: [...everyone, coordinator], now: NOW });
+      expect(me.admin?.leaders).toBeUndefined();
+      expect(JSON.stringify(me)).not.toMatch(/goto|leadUrl|P-1|P-4/);
+    }
+    // Students: item json carries only a name and phone for the person.
+    const me = buildMe({ config: live, snapshot, leader: staff, leaders: everyone, now: NOW });
+    const items = [...me.admin!.unassigned, ...me.admin!.byLeader.flatMap((g) => g.items)];
+    for (const i of items) expect(Object.keys(i.individual).sort()).toEqual(['name', 'phone']);
   });
 });
 
