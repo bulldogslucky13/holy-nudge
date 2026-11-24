@@ -134,6 +134,11 @@ Each entry says what was decided, why, and where it is enforced. No real people'
 - **Why:** Most open students are already overdue, so the first real morning would nudge nearly every leader at once. Staff check the numbers against Lead first, then the owner opens it up.
 - **Where:** `leaderAccess` in `src/core/config.ts`, used by `src/api/me.ts` and `src/job/daily.ts`; `test/audience.test.ts`.
 
+### 26. Staff can open a leader's Lead profile
+- **Decision:** On the Team tab, the match panel for a matched leader has an "Open in Lead" button that opens that person's Lead profile (`{chmsBaseUrl}/goto/individuals/{individualId}`, configurable as `individualUrlTemplate`). The staff payload (`admin.leaders`) carries that URL as `leadUrl`, on matched rows and real data only. The URL contains the leader's Lead id; no bare id field is sent and nothing else about the person. Students' ids are still never sent, and coordinators and leaders get no `admin.leaders`, so never see it. Clearing a match asks to confirm in an in-app dialog. Decided 2026-11-24.
+- **Why:** Staff need to check who a row is matched to, and an automatic match that looks fine otherwise leaves the match panel as a dead end.
+- **Where:** `leaderAdminJson` in `src/api/me.ts`, `individualUrl` in `src/core/config.ts`, `matchPanel` and `confirmDialog` in `public/app.js`; `test/me.test.ts`, `test/links.test.ts`, `test/config.test.ts`.
+
 ## Operations
 
 ### 23. No branch preview deployments

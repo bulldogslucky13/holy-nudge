@@ -409,9 +409,16 @@ describe('GET /api/me privacy contract', () => {
     const items = [...owner.behind, ...owner.admin.unassigned, ...owner.admin.byLeader.flatMap((g: any) => g.items)];
     expect(items.length).toBeGreaterThan(0);
     for (const i of items) expect(Object.keys(i.individual).sort()).toEqual(['name', 'phone']);
-    expect(owner.admin.leaders.map((l: any) => Object.keys(l).sort())[0]).toEqual(
-      ['canManage', 'coordinates', 'hasLink', 'id', 'isStaff', 'isYou', 'lastSeenAt', 'matched', 'name', 'notificationsOn'],
-    );
+    // Staff get the same fields for every row, plus `leadUrl` (their Lead profile link) only on matched rows
+    // and only on real data. Never a bare id field (docs/DECISIONS.md, 26).
+    const base = ['canManage', 'coordinates', 'hasLink', 'id', 'isStaff', 'isYou', 'lastSeenAt', 'matched', 'name', 'notificationsOn'];
+    for (const l of owner.admin.leaders) {
+      expect(Object.keys(l).sort()).toEqual(l.matched && live ? [...base, 'leadUrl'].sort() : base);
+      expect(Object.keys(l).filter((k) => /chms|individual/i.test(k))).toEqual([]);
+    }
+    expect(owner.admin.leaders.some((l: any) => l.matched)).toBe(true);
+    if (live) expect(owner.admin.leaders.find((l: any) => l.id === id.leader).leadUrl).toBe('https://wildwood.ccbchurch.com/goto/individuals/L101');
+    else expect(JSON.stringify(owner)).not.toMatch(/goto|leadUrl/);
     // Staff see who coordinates what (queue names only, read from the coordinator rows).
     expect(owner.admin.leaders.find((l: any) => l.id === id.manager).coordinates).toEqual(['Connect Card Coordinators']);
     expect(owner.admin.leaders.find((l: any) => l.id === id.leader).coordinates).toEqual([]);

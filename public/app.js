@@ -16,7 +16,8 @@
   /* localhost only: leader | admin | invalid | empty, plus the pre-launch previews
      (real data not connected yet): prelaunch (a non-staff leader, starts at onboarding; add &fake=1 to click through),
      prelaunch-off (non-staff, notifications not on: the "finish setting up" screen),
-     prelaunch-done (non-staff, all set up: the "you're all set" screen), admin-sample (staff seeing sample data).
+     prelaunch-done (non-staff, all set up: the "you're all set" screen), admin-sample (staff seeing sample data),
+     admin-nofree (staff, and no Lead person is free to match).
      With admin or admin-sample, &tab=team opens the Team tab and &match=<leader id> opens that row's Lead chooser. */
   var mock = isLocal ? query.get('mock') : null;
   var mockPrelaunch = mock === 'prelaunch' || mock === 'prelaunch-off' || mock === 'prelaunch-done';
@@ -242,6 +243,7 @@
   // All made up. A mix on purpose: staff and servant leaders, notifications on and off, one with no working link,
   // two added by name and not matched to Lead yet (17, 18), and the owner unmatched (15, which other staff can't change).
   // Coordinators: one queue (11), two (14), one not matched to Lead yet (18), and staff who also coordinates (16).
+  var mockLeadUrl = function () { return 'https://example.com/lead/individuals/0'; }; // harmless; the real one is built by the server
   var mockLeaders = [
     { id: 11, name: 'Devon Mockford', hasLink: true, lastSeenAt: hoursAgo(24 * 9), notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: ['Service Team'] },
     { id: 12, name: 'Lee Madeup', hasLink: false, lastSeenAt: null, notificationsOn: false, isStaff: false, canManage: true, isYou: false, matched: true, coordinates: [] },
@@ -290,7 +292,7 @@
 
   function mockMe() {
     var manager = mock === 'manager'; // a queue coordinator who is not staff: their queues only, no link controls
-    var admin = mock === 'admin' || mock === 'admin-sample' || manager;
+    var admin = mock === 'admin' || mock === 'admin-sample' || mock === 'admin-nofree' || manager;
     var items = [
       mockItem('e1', 'q3', 'Outreach Team', 'NOT_STARTED', '2026-11-10', 7, 'Pat Example', '405-555-0101'),
       mockItem('e2', 'q4', 'Bible Study Hosts & Events Team', 'IN_PROCESS', '2026-11-14', 3, 'Rowan Placeholder', '405-555-0102'),
@@ -320,8 +322,12 @@
         leadersWithoutNotifications: [{ name: 'Devon Mockford' }, { name: 'Lee Madeup' }],
       };
       if (!manager) {
+        mockLeaders.forEach(function (l) {
+          if (l.matched && me.live) l.leadUrl = mockLeadUrl(); // staff get a Lead profile link for matched rows on real data only
+          else delete l.leadUrl;
+        });
         me.admin.leaders = mockLeaders;
-        me.admin.leadPeople = mockLeadPeople.slice();
+        me.admin.leadPeople = mock === 'admin-nofree' || !me.live ? [] : mockLeadPeople.slice(); // the server sends none on sample data
       }
     }
     return me;
@@ -350,12 +356,14 @@
           if (!who.hasLink) return reject(new ApiError(400, 'no_link'));
           if (body.chmsId === null) {
             who.matched = false;
+            delete who.leadUrl;
             return resolve({ ok: true, matched: false });
           }
           var pick = mockLeadPeople.filter(function (p) { return p.id === body.chmsId; })[0];
           if (!pick) return reject(new ApiError(404, 'unknown_person'));
           mockLeadPeople = mockLeadPeople.filter(function (p) { return p !== pick; });
           who.matched = true;
+          who.leadUrl = mockLeadUrl();
           return resolve({ ok: true, matched: true });
         }
         if (path === '/api/leader-add' && method === 'POST') {
@@ -543,6 +551,7 @@
     addOpen: false, // add form is tucked behind an "Add a leader" button until tapped
     matchOpen: null, // id of the leader whose Lead chooser is open (staff)
     matchChoice: '', // the Lead person picked in that chooser (survives a re-render)
+    matchMore: false, // the matched panel's "Match to someone else" disclosure is open
     matchQuery: null, // what is typed in the chooser's search (null: not opened yet, starts as the leader's first name)
     matchNote: {}, // leader id -> short note after a match change ("Matched to ...")
     rf: 'idle', // the Refresh button the leader tapped: idle | busy (request or minimum time running) | done (tick showing)
@@ -1671,11 +1680,59 @@
     );
   }
 
+  /* ---- a small confirm dialog (native <dialog>: focus trap, Escape and backdrop come from the browser) ----
+     confirmDialog({ title, body, confirmLabel, cancelLabel, danger }) resolves true (confirmed) or false
+     (cancelled, Escape, backdrop). The cancel button has the focus, and focus returns to what opened it.
+     Without <dialog>.showModal it falls back to window.confirm with the same words. */
+
+  var dialogCount = 0;
+
+  function confirmDialog(o) {
+    var canModal = typeof window.HTMLDialogElement === 'function' && typeof window.HTMLDialogElement.prototype.showModal === 'function';
+    if (!canModal) return Promise.resolve(window.confirm(o.title + '\n\n' + o.body));
+    return new Promise(function (resolve) {
+      var opener = document.activeElement;
+      var id = 'confirm-' + ++dialogCount;
+      var confirmed = false;
+      var cancelBtn = h('button', { class: 'btn small-btn', type: 'button' }, o.cancelLabel || 'Cancel');
+      var okBtn = h('button', { class: 'btn small-btn ' + (o.danger ? 'danger' : 'primary'), type: 'button' }, o.confirmLabel || 'OK');
+      var dlg = h(
+        'dialog',
+        { class: 'confirm', 'aria-labelledby': id + '-title', 'aria-describedby': id + '-body' },
+        h(
+          'div',
+          { class: 'confirm-inner' },
+          h('h2', { class: 'confirm-title', id: id + '-title' }, o.title),
+          h('p', { class: 'confirm-body', id: id + '-body' }, o.body),
+          h('div', { class: 'confirm-btns' }, cancelBtn, okBtn)
+        )
+      );
+      okBtn.addEventListener('click', function () {
+        confirmed = true;
+        dlg.close();
+      });
+      cancelBtn.addEventListener('click', function () { dlg.close(); });
+      // The dialog itself has no padding, so a click whose target is the dialog is a click on the backdrop.
+      dlg.addEventListener('click', function (ev) {
+        if (ev.target === dlg) dlg.close();
+      });
+      dlg.addEventListener('close', function () {
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus();
+        resolve(confirmed);
+      });
+      document.body.appendChild(dlg);
+      dlg.showModal();
+      cancelBtn.focus();
+    });
+  }
+
   /* ---- matching a leader to their Lead (ChMS) person (staff) ---- */
 
   function openMatch(l) {
     S.matchOpen = l.id;
     S.matchChoice = '';
+    S.matchMore = false;
     S.matchQuery = null;
     delete S.matchNote[l.id];
     renderInPlace();
@@ -1688,6 +1745,7 @@
   function closeMatch() {
     S.matchOpen = null;
     S.matchChoice = '';
+    S.matchMore = false;
     S.matchQuery = null;
     renderInPlace();
   }
@@ -1716,6 +1774,8 @@
     api('/api/leader-match', { method: 'POST', body: { leaderId: l.id, chmsId: chmsId } })
       .then(function (res) {
         l.matched = !!res.matched;
+        if (!l.matched) delete l.leadUrl;
+        S.matchMore = false;
         if (chmsId !== null && Array.isArray(S.me.admin.leadPeople)) {
           S.me.admin.leadPeople = S.me.admin.leadPeople.filter(function (p) { return p.id !== chmsId; });
         }
@@ -1744,29 +1804,65 @@
     var people = Array.isArray(S.me.admin.leadPeople) ? S.me.admin.leadPeople : [];
     var NM = window.NameMatch;
     var statusEl = h('p', { class: 'status-line small', role: 'status' });
-    var cancelBtn = h('button', { class: 'btn small-btn link', type: 'button', onclick: closeMatch }, 'Cancel');
-    var clearBtn = null;
-    if (l.matched) {
-      clearBtn = h('button', { class: 'btn small-btn link', type: 'button' }, 'Clear match');
-      clearBtn.addEventListener('click', function () {
-        if (!window.confirm('Clear ' + l.name + '’s Lead match? Their link keeps working, but once real data is connected they won’t see any students until they’re matched again.')) return;
-        sendMatch(l, null, '', clearBtn, statusEl);
-      });
-    }
-    var head = h('p', { class: 'small' }, l.matched ? 'Match ' + firstName(l.name) + ' to someone else in Lead, or clear the match.' : 'Who is ' + l.name + ' in Lead? Once real data is connected, they’ll see the students assigned to that person.');
     var panelProps = { class: 'match-panel', id: 'match-panel-' + l.id, tabindex: '-1' };
+    var canChoose = people.length > 0 && !!NM;
 
-    if (!people.length || !NM) {
+    if (l.matched) {
+      // Matched: the main thing to do is open their Lead profile. Choosing someone else sits behind a
+      // disclosure (only when there is someone to choose), and Clear match / Close are quiet links.
+      var clearBtn = h('button', { class: 'btn small-btn link warn', type: 'button' }, 'Clear match');
+      clearBtn.addEventListener('click', function () {
+        confirmDialog({
+          title: 'Clear ' + l.name + '’s match?',
+          body: 'Their link keeps working, but they won’t see any students until they are matched again.',
+          confirmLabel: 'Clear match',
+          cancelLabel: 'Keep match',
+          danger: true,
+        }).then(function (ok) {
+          if (ok) sendMatch(l, null, '', clearBtn, statusEl);
+        });
+      });
+      var more = null;
+      if (canChoose) {
+        var form = chooserForm(l, people, NM, statusEl, 'Change match', null);
+        more = h('details', { class: 'match-more' }, h('summary', null, 'Match to someone else'), form);
+        if (S.matchMore) more.setAttribute('open', '');
+        more.addEventListener('toggle', function () { S.matchMore = more.open; });
+      }
+      var openLead = l.leadUrl
+        ? h('a', { class: 'btn primary open-lead', href: l.leadUrl, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Open ' + l.name + ' in Lead' }, 'Open in Lead')
+        : S.me.live === false
+          ? h('p', { class: 'muted small' }, 'Lead profiles open once real data is connected.')
+          : null;
+      return h(
+        'div',
+        panelProps,
+        h('div', { class: 'match-lines' }, h('p', { class: 'small' }, firstName(l.name) + ' is matched to their Lead profile.'), h('p', { class: 'muted small' }, 'They see the students assigned to them in Lead.')),
+        openLead,
+        more,
+        h('div', { class: 'match-quiet' }, clearBtn, h('button', { class: 'btn small-btn link', type: 'button', onclick: closeMatch }, 'Close')),
+        statusEl
+      );
+    }
+
+    var cancelBtn = h('button', { class: 'btn small-btn link', type: 'button', onclick: closeMatch }, 'Cancel');
+    var head = h('p', { class: 'small' }, 'Who is ' + l.name + ' in Lead? Once real data is connected, they’ll see the students assigned to that person.');
+
+    if (!canChoose) {
       return h(
         'div',
         panelProps,
         head,
         h('p', { class: 'muted small' }, !NM ? 'The list of people didn’t load. Reload the page and try again.' : S.me.live === false ? 'Matching to Lead opens once real data is connected.' : 'Nobody in Lead is free to match right now. People show up here once they have a student assigned or manage a queue.'),
-        h('div', { class: 'btns' }, clearBtn, cancelBtn),
+        h('div', { class: 'btns' }, cancelBtn),
         statusEl
       );
     }
+    return h('div', panelProps, head, chooserForm(l, people, NM, statusEl, 'Match', cancelBtn));
+  }
 
+  /* The chooser form: suggestions, search, a list to pick from, and the save button (plus `extraBtn`, if any). */
+  function chooserForm(l, people, NM, statusEl, saveLabel, extraBtn) {
     if (!people.some(function (p) { return p.id === S.matchChoice; })) S.matchChoice = '';
 
     var ranked = NM.rankPeople(l.name, people); // best first, ties by name
@@ -1779,7 +1875,7 @@
       S.matchQuery = others.some(function (p) { return NM.matchQuery(first, p.name) > 0; }) ? first : '';
     }
     var radioName = 'lead-person-' + l.id;
-    var saveBtn = h('button', { class: 'btn small-btn primary', type: 'submit' }, l.matched ? 'Change match' : 'Match');
+    var saveBtn = h('button', { class: 'btn small-btn primary', type: 'submit' }, saveLabel);
     var chosenEl = h('p', { class: 'small chosen-line', 'aria-live': 'polite' });
 
     function showChoice() {
@@ -1897,7 +1993,7 @@
         listEl
       ),
       chosenEl,
-      h('div', { class: 'btns' }, saveBtn, clearBtn, cancelBtn),
+      h('div', { class: 'btns' }, saveBtn, extraBtn),
       statusEl
     );
     form.addEventListener('submit', function (ev) {
@@ -1913,7 +2009,7 @@
     });
     fillResults();
     showChoice();
-    return h('div', panelProps, head, form);
+    return form;
   }
 
   function leaderRow(l) {

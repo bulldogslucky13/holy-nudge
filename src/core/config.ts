@@ -18,6 +18,16 @@ export function queueUrl(config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'queueUrl
     .replaceAll('{queueId}', encodeURIComponent(queueId));
 }
 
+/** A person's profile page in the ChMS web UI (confirmed against production 2026-11-24: /goto/individuals/<id> redirects to the profile). */
+export const DEFAULT_INDIVIDUAL_URL_TEMPLATE = '{chmsBaseUrl}/goto/individuals/{individualId}';
+
+/** Link to one person's Lead profile, from config.individualUrlTemplate (or the default). Staff only; see docs/DECISIONS.md, 26. */
+export function individualUrl(config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'individualUrlTemplate'>, individualId: string): string {
+  return (config.individualUrlTemplate ?? DEFAULT_INDIVIDUAL_URL_TEMPLATE)
+    .replaceAll('{chmsBaseUrl}', config.chmsBaseUrl)
+    .replaceAll('{individualId}', encodeURIComponent(individualId));
+}
+
 /** Web UI status_id values, read from real filtered queue URLs (2026-11-17). IN_PROCESS = 1 is inferred, not seen. */
 const WEB_STATUS_ID: Record<Status, string> = { WAITING: '0', IN_PROCESS: '1', DONE: '2', NOT_STARTED: '3' };
 
@@ -127,6 +137,13 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     }
     queueUrlTemplate = o.queueUrlTemplate;
   }
+  let individualUrlTemplate: string | undefined;
+  if (o.individualUrlTemplate !== undefined) {
+    if (typeof o.individualUrlTemplate !== 'string' || !o.individualUrlTemplate.includes('{individualId}')) {
+      fail('individualUrlTemplate must be a string containing {individualId}');
+    }
+    individualUrlTemplate = o.individualUrlTemplate;
+  }
   let adminQueueUrlTemplate: string | undefined;
   if (o.adminQueueUrlTemplate !== undefined) {
     if (typeof o.adminQueueUrlTemplate !== 'string' || !o.adminQueueUrlTemplate.includes('{queueId}')) {
@@ -146,6 +163,7 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     audience: audience as Audience,
     chmsBaseUrl: o.chmsBaseUrl.replace(/\/+$/, ''),
     ...(queueUrlTemplate !== undefined ? { queueUrlTemplate } : {}),
+    ...(individualUrlTemplate !== undefined ? { individualUrlTemplate } : {}),
     ...(adminQueueUrlTemplate !== undefined ? { adminQueueUrlTemplate } : {}),
   };
 }
