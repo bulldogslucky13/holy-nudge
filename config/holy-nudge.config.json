@@ -8,7 +8,7 @@
   "morningHour": 8,
   "followUpDays": 7,
   "firstTextHours": 72,
-  "dataSource": "fixture",
+  "dataSource": "pushpay",
   "audience": "staff",
   "chmsBaseUrl": "https://wildwood.ccbchurch.com",
   "queueUrlTemplate": "{chmsBaseUrl}/step_individuals.php?ax=my&step_id={queueId}"

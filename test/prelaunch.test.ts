@@ -5,6 +5,7 @@ import { buildMe, resolveMe } from '../src/api/me';
 import { createDataSource } from '../src/chms/index';
 import { createFixtureSource } from '../src/chms/fixture';
 import { isLive, loadConfig } from '../src/core/config';
+import type { HolyNudgeConfig } from '../src/core/types';
 import type { LeaderRow } from '../src/db';
 import { runDailyJob } from '../src/job/daily';
 import { loadSnapshot } from '../src/job/load';
@@ -16,14 +17,18 @@ const row = (over: Partial<LeaderRow>): LeaderRow => ({
   id: 1, chmsIndividualId: null, name: 'X', hasLink: true, isAdmin: false, isOwner: false, lastSeenAt: null, revokedAt: null, subscriptionCount: 0, matchByHand: false, coordinatorOf: [], ...over,
 });
 
-const fixtureCfg = loadConfig(); // the bundled config; asserted below to be the fixture one
+const shipped = loadConfig(); // the bundled config: real data, released to staff first (asserted below)
+const fixtureCfg: HolyNudgeConfig = { ...shipped, dataSource: 'fixture' };
 const liveCfg = { ...fixtureCfg, dataSource: 'pushpay' as const, audience: 'everyone' as const };
 
 describe('isLive', () => {
   it('is false for the fixture and true for anything else', () => {
     expect(isLive({ dataSource: 'fixture' })).toBe(false);
     expect(isLive({ dataSource: 'pushpay' })).toBe(true);
-    expect(isLive(fixtureCfg)).toBe(false); // still pre-launch in the bundled config
+    expect(isLive(fixtureCfg)).toBe(false);
+    // The bundled config: real data is on, for staff only. Opening it to everyone is a deliberate change
+    // to config/holy-nudge.config.json and to this line (docs/DECISIONS.md, 25).
+    expect({ dataSource: shipped.dataSource, audience: shipped.audience }).toEqual({ dataSource: 'pushpay', audience: 'staff' });
   });
 });
 
