@@ -2,7 +2,8 @@
 // Sources (fetched 2026-11-17): OpenAPI https://docs.pushpay.io/chms-v2/openapi/chms-api-specs.json,
 // guide https://docs.pushpay.io/chms-v2/docs/process-queues-automating-workflows.md,
 // rate limits and paging https://docs.pushpay.io/chms-v2/docs/general.md. See docs/chms-api-notes.md.
-// Every assumption the sandbox must confirm is marked `SANDBOX:`.
+// Every assumption still to confirm is marked `SANDBOX:`; ones settled by the first real reads
+// say "Confirmed against production 2026-11-24" (see docs/chms-api-notes.md).
 // Logs carry ids and counts only: never names, phones, emails or tokens.
 import type { DataSource, Person, Queue, QueueEntry, Status } from '../core/types';
 import { ACCEPT_V2, apiHost, type OAuthEnv } from './oauth';
@@ -68,8 +69,10 @@ interface RawQueueRow {
   order_by?: number;
   managers?: RawPerson[] | null;
   queue_managers?: RawPerson[] | null;
-  assigned_count?: number;
-  unassigned_count?: number;
+  /** Not sent by the production API (confirmed 2026-11-24); kept in case a later version sends it. */
+  assigned_count?: number | string | null;
+  /** Confirmed against production 2026-11-24: a numeric string ("5") or null. null = not available. */
+  unassigned_count?: number | string | null;
 }
 
 interface RawStatusCounts {
@@ -86,6 +89,7 @@ interface RawQueueDetail {
   name?: string;
   managers?: { id?: number | string; name?: string }[] | null;
   process?: { id?: number | string } | null;
+  /** In the OpenAPI, but confirmed absent in production 2026-11-24; harmless if a later version sends it. */
   status_counts?: RawStatusCounts | null;
 }
 
@@ -119,8 +123,8 @@ const MIDNIGHT = /^(\d{4}-\d{2}-\d{2})[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00(?::?
  * The one place a ChMS `due` value is interpreted. Output feeds core/time.ts `dueToDate`,
  * which keeps date-only values as calendar dates and converts offset datetimes to Central.
  *
- * SANDBOX: the OpenAPI types `due` as date-time with no zone; the PQ guide says dates only
- * ("YYYY-MM-DD"). Handling, in order:
+ * Confirmed against production 2026-11-24: `due` is date-only ("YYYY-MM-DD"), as the PQ guide
+ * says (the OpenAPI types it as date-time). The other shapes are still handled defensively:
  *   - null, "", "-0001-11-30 ..." placeholders -> null (no due date)
  *   - "2026-11-05" -> as-is (calendar date)
  *   - midnight, UTC or no zone ("2026-11-05T00:00:00Z", "...00:00:00.000Z", "2026-11-05 00:00:00")
@@ -152,8 +156,9 @@ function mapOptionalTimestamp(raw: unknown): string | null {
 
 /**
  * Phone for tap-to-text/call: mobile first, else the number `preferred_number` points at.
- * SANDBOX: whether queue rows' nested `individual` carries `phone` at all (the PQ guide's
- * example row has email but no phone). See the fetchContactsPerIndividual option.
+ * Confirmed against production 2026-11-24: queue rows' nested `individual` carries `phone`.
+ * SANDBOX: the inner shape of `phone` ({mobile, home, work}) was not inspected, and
+ * `preferred_number` was not among the observed `individual` keys.
  */
 export function pickPhone(p: RawPerson | null | undefined): string | undefined {
   const phone = p?.phone;
@@ -188,7 +193,8 @@ export function mapEntry(r: RawEntry): QueueEntry {
   }
   const id = String(r.queue_individual_id);
   if (!STATUSES.includes(r.status as Status)) throw new ChmsDataError('Entry with an unknown status');
-  // SANDBOX: `created` is date-only per the PQ guide ("2026-09-15"); passed through unchanged.
+  // Confirmed against production 2026-11-24: `created` and `completed` are date-only
+  // ("2026-09-15"); passed through unchanged.
   const created = mapOptionalTimestamp(r.created);
   if (!created) throw new ChmsDataError('Entry with no created date');
   const individual = mapPerson(r.individual ?? null) ?? mapPerson({ id: r.individual_id ?? null });
@@ -206,17 +212,54 @@ export function mapEntry(r: RawEntry): QueueEntry {
 }
 
 /**
- * Compare fetched entries with the queue's own counts. Returns human-readable mismatches
- * (counts only), or ['no counts available'] when there is nothing to compare with.
+ * What one paged read saw. `scope` says what `total` covers: one queue (queue_ids[] read) or
+ * the whole process (fallback read), so a per-queue slice is never compared to a process total.
+ */
+export interface PagingCheck {
+  scope: 'queue' | 'process';
+  /** `x-total` from the server; null when no page carried it. */
+  total: number | null;
+  /** `x-total` differed between pages of the same read (the list moved mid-read). */
+  totalChanged: boolean;
+  /** Rows received across all pages, before de-duplication. */
+  received: number;
+  /** Rows left after de-duplication by queue_individual_id. */
+  unique: number;
+}
+
+/** A count from the API: a non-negative integer or a numeric string. Anything else (null too) = not available. */
+export function toCount(v: unknown): number | undefined {
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 0 ? v : undefined;
+  if (typeof v === 'string' && /^\d+$/.test(v.trim())) return Number(v.trim());
+  return undefined;
+}
+
+/**
+ * Compare fetched entries with what the API says should be there: the paging total of the
+ * read (`x-total`), and the queue's own counts when the API sends any. Returns human-readable
+ * mismatches (counts only), or ['no counts available to verify against'] when there is
+ * nothing to compare with.
  */
 export function completenessMismatches(
   entries: QueueEntry[],
   counts: RawStatusCounts | null | undefined,
   listRow?: Pick<RawQueueRow, 'assigned_count' | 'unassigned_count'>,
+  paging?: PagingCheck | null,
 ): string[] {
   const got = (pred: (e: QueueEntry) => boolean) => entries.filter(pred).length;
   const out: string[] = [];
   let compared = 0;
+  if (paging && (paging.total !== null || paging.totalChanged)) {
+    compared++;
+    const what = paging.scope === 'process' ? 'process-wide read' : 'rows';
+    if (paging.totalChanged) {
+      out.push(`${what}: x-total changed between pages`);
+    } else if (paging.received !== paging.total) {
+      out.push(`${what}: x-total ${paging.total}, received ${paging.received}`);
+    }
+    // A row seen twice means the list shifted between pages, so another row may have been skipped.
+    if (paging.unique !== paging.received) out.push(`${what}: ${paging.received - paging.unique} duplicate rows across pages`);
+  }
   const byStatus: [keyof RawStatusCounts, Status][] = [
     ['not_started', 'NOT_STARTED'],
     ['in_process', 'IN_PROCESS'],
@@ -224,15 +267,16 @@ export function completenessMismatches(
     ['done', 'DONE'],
   ];
   for (const [field, status] of byStatus) {
-    const expected = counts?.[field];
-    if (typeof expected !== 'number') continue;
+    const expected = toCount(counts?.[field]);
+    if (expected === undefined) continue;
     compared++;
     const actual = got((e) => e.status === status);
     if (actual !== expected) out.push(`${field}: expected ${expected}, got ${actual}`);
   }
   // SANDBOX: unknown whether unassigned/assigned counts include DONE entries; accept either reading.
-  const either = (label: string, expected: unknown, all: number, open: number) => {
-    if (typeof expected !== 'number') return;
+  const either = (label: string, raw: unknown, all: number, open: number) => {
+    const expected = toCount(raw);
+    if (expected === undefined) return;
     compared++;
     if (expected !== all && expected !== open) out.push(`${label}: expected ${expected}, got ${open} open / ${all} total`);
   };
@@ -302,9 +346,9 @@ export class PushpayDataSource implements DataSource {
   private readonly queues = new Map<string, QueueInfo>();
   private readonly contactCache = new Map<string, Promise<Person | null>>();
   private token: string | null = null;
-  /** false once /queues_individuals is seen to ignore queue_ids[] (SANDBOX). */
+  /** false once /queues_individuals is seen to ignore queue_ids[] (production honours it, 2026-11-24). */
   private serverQueueFilter = true;
-  private allRows: Promise<Map<string, RawEntry[]>> | null = null;
+  private allRows: Promise<{ byQueue: Map<string, RawEntry[]>; paging: PagingCheck }> | null = null;
 
   constructor(private readonly opts: PushpayOptions) {
     this.doFetch = opts.fetch ?? ((input, init) => fetch(input, init));
@@ -344,22 +388,35 @@ export class PushpayDataSource implements DataSource {
   }
 
   /**
-   * Every entry in the queue, all four statuses, verified against the queue's counts.
-   * Throws IncompleteDataError if the numbers still disagree after one re-read.
+   * Every entry in the queue, all four statuses, verified against what the API says should
+   * be there. Throws IncompleteDataError if the numbers still disagree after one re-read.
+   *
+   * Checks (completenessMismatches): the read's `x-total` against the rows received (and no
+   * duplicates across pages); the list row's `unassigned_count` when it is a number; and
+   * `status_counts` / `assigned_count` if a later API version sends them. Confirmed against
+   * production 2026-11-24: `x-total` is sent, `unassigned_count` is a string or null, and
+   * there is no `status_counts` or `assigned_count`. Strict: with nothing at all to compare it
+   * fails rather than trusting the rows.
+   *
+   * On the re-read the /queues list is fetched again (one request) so `unassigned_count` is
+   * current: the row from listQueues can be a minute old, and a coordinator assigning a card
+   * in that minute must not fail the run. If the queue is missing from the fresh list the
+   * comparison is skipped for that attempt; the paging total still applies.
+   *
    * SANDBOX: the docs do not say whether, under System Auth, /queues_individuals returns
    * entries assigned to people other than the authorizing user (`assignment` omitted = "both"
-   * of assigned-to-me and unassigned). The count check is the safeguard. It is strict: with
-   * no counts to compare (status_counts is in the OpenAPI QueueDetail but not mentioned by the
-   * PQ guide) it fails rather than trusting the rows.
+   * of assigned-to-me and unassigned). `x-total` cannot show this (it counts what the server
+   * chose to return) and `unassigned_count` covers only unassigned rows.
    */
   async listEntries(queueId: string): Promise<QueueEntry[]> {
     for (let attempt = 1; ; attempt++) {
       const cached = this.queues.get(queueId);
       const detail = attempt === 1 && cached?.detail ? cached.detail : await this.getQueueDetail(queueId);
       if (cached) cached.detail = detail;
-      const rows = await this.fetchQueueRows(queueId, attempt > 1);
+      const { rows, paging } = await this.fetchQueueRows(queueId, attempt > 1);
+      const listRow = attempt === 1 ? cached?.row : await this.refreshListRow(queueId);
       const entries = rows.map(mapEntry);
-      const mismatches = completenessMismatches(entries, detail.status_counts, cached?.row);
+      const mismatches = completenessMismatches(entries, detail.status_counts, listRow, paging);
       if (mismatches.length === 0) {
         return this.opts.fetchContactsPerIndividual ? this.fillContacts(entries) : entries;
       }
@@ -370,6 +427,22 @@ export class PushpayDataSource implements DataSource {
   }
 
   // --- queues ---------------------------------------------------------------
+
+  /** Re-reads the process's /queues list and returns this queue's fresh row (undefined if unknown or gone). */
+  private async refreshListRow(queueId: string): Promise<RawQueueRow | undefined> {
+    const info = this.queues.get(queueId);
+    if (!info) return undefined;
+    const rows = await this.getAll<RawQueueRow>('/queues', [['process_ids[]', info.processId]]);
+    let fresh: RawQueueRow | undefined;
+    for (const r of rows) {
+      if (r.id === undefined || (r.process_id !== undefined && String(r.process_id) !== info.processId)) continue;
+      const known = this.queues.get(String(r.id));
+      if (known && known.processId === info.processId) known.row = r; // later queues get the fresh count too
+      if (String(r.id) === queueId) fresh = r;
+    }
+    if (!fresh) this.log(`pushpay: queue ${queueId} missing from the refreshed queue list; skipping its unassigned_count check`);
+    return fresh;
+  }
 
   private async getQueueDetail(queueId: string): Promise<RawQueueDetail> {
     const { body } = await this.get<RawQueueDetail>(`/queues/${encodeURIComponent(queueId)}`, []);
@@ -396,31 +469,38 @@ export class PushpayDataSource implements DataSource {
     return STATUSES.map((s) => ['statuses[]', s]);
   }
 
-  private async fetchQueueRows(queueId: string, fresh: boolean): Promise<RawEntry[]> {
+  private async fetchQueueRows(queueId: string, fresh: boolean): Promise<{ rows: RawEntry[]; paging: PagingCheck }> {
     if (this.serverQueueFilter) {
-      // SANDBOX: queue_ids[] is in the PQ guide but not in the OpenAPI parameter list.
-      const rows = await this.getAll<RawEntry>('/queues_individuals', [
+      // queue_ids[] is in the PQ guide but not in the OpenAPI parameter list. Confirmed against
+      // production 2026-11-24: it is honoured. The fallback below stays for safety.
+      const read = await this.getPaged<RawEntry>('/queues_individuals', [
         ['queue_ids[]', queueId],
         ...PushpayDataSource.statusParams(),
       ]);
-      const foreign = rows.filter((r) => String(r.queue_id) !== queueId).length;
-      if (foreign === 0) return dedupe(rows);
+      const foreign = read.rows.filter((r) => String(r.queue_id) !== queueId).length;
+      if (foreign === 0) {
+        const rows = dedupe(read.rows);
+        return { rows, paging: { scope: 'queue', total: read.total, totalChanged: read.totalChanged, received: read.rows.length, unique: rows.length } };
+      }
       this.serverQueueFilter = false;
       this.log(`pushpay: queue_ids[] filter was ignored (${foreign} rows from other queues); switching to one process-wide read`);
     }
     if (fresh || !this.allRows) {
       const processId = this.queues.get(queueId)?.processId;
       const query: [string, string][] = processId ? [['process_ids[]', processId]] : [];
-      const pending = this.getAll<RawEntry>('/queues_individuals', [...query, ...PushpayDataSource.statusParams()]).then(
-        (rows) => {
+      const pending = this.getPaged<RawEntry>('/queues_individuals', [...query, ...PushpayDataSource.statusParams()]).then(
+        (read) => {
+          const unique = dedupe(read.rows);
           const byQueue = new Map<string, RawEntry[]>();
-          for (const r of dedupe(rows)) {
+          for (const r of unique) {
             const k = String(r.queue_id);
             const list = byQueue.get(k) ?? [];
             list.push(r);
             byQueue.set(k, list);
           }
-          return byQueue;
+          // x-total here covers the whole process, so it is checked against the whole read.
+          const paging: PagingCheck = { scope: 'process', total: read.total, totalChanged: read.totalChanged, received: read.rows.length, unique: unique.length };
+          return { byQueue, paging };
         },
       );
       this.allRows = pending;
@@ -428,7 +508,8 @@ export class PushpayDataSource implements DataSource {
         if (this.allRows === pending) this.allRows = null;
       });
     }
-    return (await this.allRows!).get(queueId) ?? [];
+    const all = await this.allRows!;
+    return { rows: all.byQueue.get(queueId) ?? [], paging: all.paging };
   }
 
   private async fillContacts(entries: QueueEntry[]): Promise<QueueEntry[]> {
@@ -463,7 +544,21 @@ export class PushpayDataSource implements DataSource {
   // --- HTTP -----------------------------------------------------------------
 
   private async getAll<T>(path: string, query: [string, string][]): Promise<T[]> {
+    return (await this.getPaged<T>(path, query)).rows;
+  }
+
+  /**
+   * Every page of a list, with the server's `x-total`. If `x-total` differs between pages the
+   * list moved mid-read: `totalChanged` is set and the caller treats it as a mismatch (re-read),
+   * the stricter of the two options, since rows may have shifted past a page boundary.
+   */
+  private async getPaged<T>(
+    path: string,
+    query: [string, string][],
+  ): Promise<{ rows: T[]; total: number | null; totalChanged: boolean }> {
     const out: T[] = [];
+    let total: number | null = null;
+    let totalChanged = false;
     for (let page = 1; ; page++) {
       if (page > this.maxPages) {
         throw new ChmsDataError(`${path}: more than ${this.maxPages} pages; refusing to continue`);
@@ -475,8 +570,14 @@ export class PushpayDataSource implements DataSource {
       ]);
       if (!Array.isArray(body)) throw new ChmsDataError(`${path}: expected a list`);
       out.push(...(body as T[]));
-      // SANDBOX: /queues_individuals documents no paging headers; use them when present,
-      // otherwise stop on a short page.
+      const pageTotal = toInt(headers.get('x-total'));
+      if (pageTotal !== null) {
+        if (total !== null && total !== pageTotal) totalChanged = true;
+        total = pageTotal;
+      }
+      // /queues_individuals documents no paging headers, but confirmed against production
+      // 2026-11-24: x-page, x-per-page, x-total, x-total-pages on every page, and x-next-page
+      // except on the last. Still stop on a short page if they ever go missing.
       const pageSize = toInt(headers.get('x-per-page')) ?? this.perPage;
       const next = headers.get('x-next-page');
       const totalPages = toInt(headers.get('x-total-pages'));
@@ -484,13 +585,14 @@ export class PushpayDataSource implements DataSource {
       if (next !== null && next.trim() === '') break;
       if (totalPages !== null && page >= totalPages) break;
     }
-    return out;
+    return { rows: out, total, totalChanged };
   }
 
   private async get<T>(path: string, query: [string, string][]): Promise<{ body: T; headers: Headers }> {
     // Array params must be sent as literal `key[]=v` (a bare key gets 412); built by hand so
-    // the brackets are not percent-encoded, matching the guide's curl examples. SANDBOX: the
-    // OpenAPI declares `statuses` as a plain exploded form array (no []); the guide wins here.
+    // the brackets are not percent-encoded, matching the guide's curl examples. The OpenAPI
+    // declares `statuses` as a plain exploded form array (no []); the guide wins here, and
+    // `statuses[]` was confirmed against production 2026-11-24 (DONE rows come back).
     const qs = query.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
     const url = `${this.opts.apiHost.replace(/\/+$/, '')}${path}${qs ? `?${qs}` : ''}`;
     const endpoint = path.replace(/\/\d+(?=\/|$)/g, '/{id}');

@@ -215,6 +215,23 @@ Contradictions with ARCHITECTURE.md or the brief:
 - ARCHITECTURE `due` "date or datetime": docs say date-time everywhere; time-zone semantics unknown.
 - Brief says OAuth credentials; GS allows body or Basic; TOK page shows a JSON body with `subdomain`, which conflicts with GS. Resolved in section 1: both come from the raw sources; implemented per GS (form body, credentials in body, no `subdomain`), sandbox to confirm.
 
+## Confirmed against production (2026-11-24)
+
+The church's Master Admin approved the app on 2026-11-24 and the live API was read once, read-only, looking at counts and response shapes only (no student data kept). These settle open questions 2, 3 (dates), 8, 16, 17 and 19, and part of 5.
+
+- OAuth, all six scopes, the v2 `Accept` header and the endpoints below work.
+- `GET /queues?process_ids[]=37&per_page=100` returns a JSON array (12 rows for the process). Row keys: `id, process_id, process_campus_id, children, name, order_by, description, note, process, automations, unassigned_count, process_name, queue_managers, managers, integrations`. There is **no `assigned_count`**. `unassigned_count` is a **string or null** (e.g. `"5"`, `"0"`, `"324"`, `"1"`; `null` on several queues, meaning not known: none, or not computed). Sends the paging headers (`x-total: 12`).
+- `GET /queues/{id}` returns only `id, name, description, note, process, managers`. There is **no `status_counts`**.
+- `GET /queues_individuals?queue_ids[]={id}&statuses[]=NOT_STARTED&statuses[]=IN_PROCESS&statuses[]=WAITING&statuses[]=DONE&per_page=100` returns a JSON array. **`queue_ids[]` is honoured** (no rows from other queues). Literal `statuses[]` works. Without `statuses[]` only not-DONE rows come back (queue 228: 5 rows against 203 with all statuses), so DONE must be asked for.
+- Paging headers on every page: `x-page`, `x-per-page`, `x-total`, `x-total-pages`, and `x-next-page` only when there is a next page (absent on the last). Examples: queue 212 `x-total: 323` over 4 pages; queue 229 `x-total: 55`, one page. Most queues carry hundreds of DONE rows, so a queue is usually several pages.
+- Rate-limit headers on 200s: `x-ratelimit-limit: 101`, `x-ratelimit-remaining`, `x-ratelimit-reset` (epoch seconds).
+- Entry row keys: `queue_individual_id, queue_id, individual_id, status, due, overdue, created, completed, process, queue, individual, assignee`. `due`, `created` and `completed` are **date-only** `YYYY-MM-DD`. Statuses seen: `DONE`, `NOT_STARTED`.
+- Nested `individual` keys: `id, phone, campus_id, family_id, first_name, last_name, name, email, active, urls, actions`. Nested `assignee` keys: `id, phone, campus_id, family_id, first_name, last_name, name, email, urls, actions, images`. The inner shape of `phone` was not inspected, and there is no `preferred_number`.
+
+**Completeness check, as implemented after this:** since there are no `status_counts`, `listEntries` verifies each queue read against its own `x-total` (rows received across pages must equal it, with no row seen twice; an `x-total` that changes between pages counts as a mismatch), plus `unassigned_count` when it is a number (either reading: with or without DONE). The `/queues` list is fetched again on the re-read so that count is current. In the process-wide fallback the total is checked against the whole process read, never a single queue. With nothing to compare, it still fails closed.
+
+Still open: question 1 (does the read include rows assigned to people other than the approving admin? `x-total` cannot tell, since it counts what the server chose to return), 4 (shape of an unassigned `assignee`), whether `unassigned_count` includes DONE (18), the shape of `phone` (21), and the token and error items (6, 7, 9, 13 to 15).
+
 ## Open questions for the sandbox
 
 Items 13 onwards were added with the live implementation; each matches a `// SANDBOX:` comment in `src/chms/`.

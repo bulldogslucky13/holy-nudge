@@ -9,6 +9,7 @@ import {
   mapEntry,
   mapPerson,
   PushpayDataSource,
+  toCount,
   type PushpayOptions,
 } from '../src/chms/pushpay';
 import { dueToDate } from '../src/core/time';
@@ -33,6 +34,10 @@ interface FakeApi {
   /** Hide entries assigned to anyone but this id (simulates "only what the user can see"). */
   visibleAssignee: string | null;
   pagingHeaders: boolean;
+  /** Serve status_counts on GET /queues/{id} (the OpenAPI has it; production does not). */
+  statusCounts: boolean;
+  /** Rewrite the x-total header of a list response (n = request number). */
+  xTotal: ((real: number, url: URL, n: number) => number) | null;
   requests: URL[];
   auth: string[];
   /** Per-request override; return undefined to fall through. */
@@ -86,8 +91,10 @@ function page<T>(rows: T[], url: URL): Response {
   const p = Number(url.searchParams.get('page') ?? 1);
   const slice = rows.slice((p - 1) * per, p * per);
   const totalPages = Math.max(1, Math.ceil(rows.length / per));
+  // As production sends them (2026-11-24): x-next-page only when there is a next page.
+  const total = api.xTotal ? api.xTotal(rows.length, url, api.requests.length) : rows.length;
   const headers: Record<string, string> = api.pagingHeaders
-    ? { 'x-total': String(rows.length), 'x-total-pages': String(totalPages), 'x-page': String(p), 'x-per-page': String(per), 'x-next-page': p < totalPages ? String(p + 1) : '' }
+    ? { 'x-total': String(total), 'x-total-pages': String(totalPages), 'x-page': String(p), 'x-per-page': String(per), ...(p < totalPages ? { 'x-next-page': String(p + 1) } : {}) }
     : {};
   return Response.json(slice, { headers });
 }
@@ -109,7 +116,8 @@ const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if ((m = /^\/queues\/(\d+)$/.exec(path))) {
     const d = api.details[m[1]!];
-    return d ? Response.json({ ...d, status_counts: d.status_counts ?? countsFor(Number(m[1])) }) : new Response('', { status: 404 });
+    if (!d) return new Response('', { status: 404 });
+    return Response.json(api.statusCounts ? { ...d, status_counts: d.status_counts ?? countsFor(Number(m[1])) } : d);
   }
   if (path === '/queues_individuals') {
     expect(raw).toContain('statuses[]=NOT_STARTED&statuses[]=IN_PROCESS&statuses[]=WAITING&statuses[]=DONE');
@@ -183,6 +191,8 @@ beforeEach(() => {
     ignoreQueueFilter: false,
     visibleAssignee: null,
     pagingHeaders: true,
+    statusCounts: true,
+    xTotal: null,
     requests: [],
     auth: [],
     intercept: null,
@@ -260,6 +270,8 @@ describe('listEntries', () => {
   });
 
   it('throws IncompleteDataError when the rows do not add up to the queue counts', async () => {
+    // Only status_counts can catch this: x-total counts what the server chose to return.
+    // Production sends no status_counts (2026-11-24), so this guards a future API version.
     api.visibleAssignee = '801'; // the API hides rows assigned to other leaders
     const err = await source().listEntries('5001').catch((e) => e);
     expect(err).toBeInstanceOf(IncompleteDataError);
@@ -282,8 +294,8 @@ describe('listEntries', () => {
   });
 
   it('refuses to verify against nothing', async () => {
-    api.intercept = (url) => (url.pathname === '/queues/5002' ? Response.json({ id: 5002, managers: [] }) : undefined);
-    api.details['5002']!.status_counts = undefined;
+    api.statusCounts = false;
+    api.pagingHeaders = false;
     await expect(source().listEntries('5002')).rejects.toBeInstanceOf(IncompleteDataError);
   });
 
@@ -311,6 +323,129 @@ describe('listEntries', () => {
     const individualCalls = paths().filter((p) => p.startsWith('/individuals/'));
     expect(individualCalls).toHaveLength(10); // the 10 open entries, not the DONE one
     expect(individualCalls).not.toContain('/individuals/70141');
+  });
+});
+
+describe('listEntries against production-shaped responses (2026-11-24)', () => {
+  // No status_counts, no assigned_count, unassigned_count a string or null, x-total on every page.
+  const realQueues = (unassigned: Record<string, string | null>) => {
+    api.statusCounts = false;
+    api.queues = api.queues.map(({ assigned_count: _drop, ...q }) => ({ ...q, unassigned_count: unassigned[String(q.id)] ?? null }));
+  };
+  const entryReads = () => api.requests.filter((u) => u.pathname === '/queues_individuals');
+
+  it('passes on a multi-page queue verified by x-total and a string unassigned_count', async () => {
+    realQueues({ '5001': '33', '5002': '3' }); // 5001: 33 open unassigned of 44; 5002: 3 of 3
+    const ds = source();
+    await ds.listQueues('37');
+    expect(await ds.listEntries('5001')).toHaveLength(130);
+    expect(await ds.listEntries('5002')).toHaveLength(10);
+    expect(entryReads().map((u) => u.searchParams.get('page'))).toEqual(['1', '2', '1']);
+    expect(logs).toEqual([]);
+  });
+
+  it('re-reads once when fewer rows arrive than x-total, then fails closed with counts only', async () => {
+    realQueues({});
+    api.xTotal = (real, url) => (url.pathname === '/queues_individuals' ? real + 1 : real);
+    const ds = source();
+    await ds.listQueues('37');
+    const err = await ds.listEntries('5001').catch((e) => e);
+    expect(err).toBeInstanceOf(IncompleteDataError);
+    expect(err.message).toContain('rows: x-total 131, received 130');
+    expect(err.message).not.toMatch(/Student|example\.com|555-|900\d{3}|70\d{3}/);
+    expect(entryReads()).toHaveLength(4); // two pages, twice
+    expect(logs.some((l) => l.includes('re-reading once'))).toBe(true);
+  });
+
+  it('recovers when the re-read adds up', async () => {
+    realQueues({});
+    let reads = 0;
+    api.xTotal = (real, url) => {
+      if (url.pathname !== '/queues_individuals') return real;
+      return url.searchParams.get('page') === '1' && ++reads === 1 ? real + 1 : real;
+    };
+    const ds = source();
+    await ds.listQueues('37');
+    expect(await ds.listEntries('5002')).toHaveLength(10);
+    expect(entryReads()).toHaveLength(2);
+  });
+
+  it('treats x-total changing between pages as a mismatch', async () => {
+    realQueues({});
+    api.xTotal = (real, url) => (url.pathname === '/queues_individuals' && url.searchParams.get('page') === '2' ? real + 1 : real);
+    const err = await source().listEntries('5001').catch((e) => e);
+    expect(err).toBeInstanceOf(IncompleteDataError);
+    expect(err.message).toContain('x-total changed between pages');
+  });
+
+  it('catches a row seen twice across pages even when the row count matches x-total', async () => {
+    realQueues({});
+    // The list shifted by one between pages: page 2 repeats the last row of page 1.
+    api.intercept = (url) => {
+      if (url.pathname !== '/queues_individuals' || url.searchParams.get('page') !== '2') return undefined;
+      const rows = api.entries.filter((e) => e.queue_id === 5001);
+      return Response.json(rows.slice(99, 129), { headers: { 'x-total': '130', 'x-total-pages': '2', 'x-per-page': '100', 'x-page': '2' } });
+    };
+    const err = await source().listEntries('5001').catch((e) => e);
+    expect(err).toBeInstanceOf(IncompleteDataError);
+    expect(err.message).toContain('rows: 1 duplicate rows across pages');
+  });
+
+  it('still fails closed with unassigned_count null, no paging headers and no counts', async () => {
+    realQueues({ '5002': null });
+    api.pagingHeaders = false;
+    const ds = source();
+    await ds.listQueues('37');
+    const err = await ds.listEntries('5002').catch((e) => e);
+    expect(err).toBeInstanceOf(IncompleteDataError);
+    expect(err.message).toContain('no counts available to verify against');
+  });
+
+  it('reads unassigned_count "5" as a number and reports it when the rows disagree', async () => {
+    realQueues({ '5002': '5' }); // the rows have 3 unassigned
+    const ds = source();
+    await ds.listQueues('37');
+    const err = await ds.listEntries('5002').catch((e) => e);
+    expect(err).toBeInstanceOf(IncompleteDataError);
+    expect(err.message).toContain('unassigned_count: expected 5, got 3 open / 3 total');
+    // the re-read refreshed the queue list once
+    expect(paths().filter((p) => p === '/queues')).toHaveLength(2);
+  });
+
+  it('refreshes the queue list on the re-read so a card assigned mid-run is not a failure', async () => {
+    realQueues({ '5002': '4' }); // stale: someone assigned a card after the list was read
+    const ds = source();
+    await ds.listQueues('37');
+    api.queues = api.queues.map((q) => (q.id === 5002 ? { ...q, unassigned_count: '3' } : q));
+    expect(await ds.listEntries('5002')).toHaveLength(10);
+    expect(paths().filter((p) => p === '/queues')).toHaveLength(2);
+  });
+
+  it('verifies the process-wide fallback read against its own total, not per queue', async () => {
+    realQueues({});
+    api.ignoreQueueFilter = true;
+    const ds = source();
+    await ds.listQueues('37');
+    expect(await ds.listEntries('5001')).toHaveLength(130); // x-total of the read is 141, the whole read
+    expect(await ds.listEntries('5002')).toHaveLength(10);
+    expect(entryReads().map((u) => u.searchParams.has('queue_ids[]'))).toEqual([true, true, false, false]);
+
+    api.requests = [];
+    const ds2 = source();
+    await ds2.listQueues('37');
+    api.xTotal = (real, url) => (url.pathname === '/queues_individuals' && !url.searchParams.has('queue_ids[]') ? real - 1 : real);
+    const err = await ds2.listEntries('5002').catch((e) => e);
+    expect(err).toBeInstanceOf(IncompleteDataError);
+    expect(err.message).toContain('process-wide read: x-total 140, received 141');
+    // the process-wide read was repeated for the re-read
+    expect(entryReads().filter((u) => !u.searchParams.has('queue_ids[]'))).toHaveLength(4);
+  });
+});
+
+describe('toCount', () => {
+  it('reads numbers and numeric strings; null and junk are "not available", not zero', () => {
+    expect([5, '5', '0', ' 324 ', 0].map(toCount)).toEqual([5, 5, 0, 324, 0]);
+    expect([null, undefined, '', 'n/a', '-1', '1.5', -1, 1.5, NaN].map(toCount)).toEqual(Array(9).fill(undefined));
   });
 });
 
@@ -380,7 +515,7 @@ describe('HTTP behaviour', () => {
 });
 
 describe('due dates', () => {
-  // SANDBOX: which of these formats the API really sends is unconfirmed.
+  // Confirmed against production 2026-11-24: `due` is date-only. The other shapes stay covered defensively.
   it.each([
     ['2026-11-05', '2026-11-05'],
     ['2026-11-05T00:00:00Z', '2026-11-05'],
@@ -434,6 +569,16 @@ describe('completenessMismatches', () => {
     expect(completenessMismatches(entries, { ...base, unassigned: 2 })).toEqual([]);
     expect(completenessMismatches(entries, { ...base, unassigned: 3 })).toHaveLength(1);
     expect(completenessMismatches(entries, base, { assigned_count: 2 })).toHaveLength(1);
+  });
+
+  it('verifies against x-total alone, and fails closed with nothing to compare', () => {
+    const entries = [e('NOT_STARTED', false), e('DONE', true)];
+    const paging = { scope: 'queue' as const, total: 2, totalChanged: false, received: 2, unique: 2 };
+    expect(completenessMismatches(entries, null, { unassigned_count: null }, paging)).toEqual([]);
+    expect(completenessMismatches(entries, null, { unassigned_count: '1' }, paging)).toEqual([]);
+    expect(completenessMismatches(entries, null, { unassigned_count: null }, { ...paging, total: null })).toEqual([
+      'no counts available to verify against',
+    ]);
   });
 });
 
