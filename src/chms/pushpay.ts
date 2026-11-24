@@ -375,8 +375,8 @@ export class PushpayDataSource implements DataSource {
   }
 
   /**
-   * Queues of a process, in ChMS order. Managers come from the list row (`managers`, else
-   * `queue_managers`); GET /queues/{id} is called only for a row with neither as an array.
+   * Queues of a process, in ChMS order. Managers come from the list row (`queue_managers`, else
+   * `managers` when it holds objects); GET /queues/{id} is called only for a row with neither.
    * Managers are kept as id and name only: they grant nothing (docs/DECISIONS.md, 10) and are
    * used only to know which Lead people exist.
    */
@@ -397,9 +397,12 @@ export class PushpayDataSource implements DataSource {
     const out: Queue[] = [];
     for (const row of mine) {
       const id = String(row.id);
-      // Confirmed against production 2026-11-24: list rows carry both `managers` and
-      // `queue_managers` keys. SANDBOX: their contents were not inspected.
-      const fromRow = Array.isArray(row.managers) ? row.managers : Array.isArray(row.queue_managers) ? row.queue_managers : null;
+      // Confirmed against production 2026-11-24: on list rows `queue_managers` is the list of
+      // { id, name } and `managers` is a list of bare name strings (no ids, so useless here).
+      // Take whichever is a list of objects, `queue_managers` first; an empty list is a real answer.
+      const people = (v: unknown): RawPerson[] | null =>
+        Array.isArray(v) && v.every((m) => m !== null && typeof m === 'object') ? (v as RawPerson[]) : null;
+      const fromRow = people(row.queue_managers) ?? people(row.managers);
       const detail = fromRow ? null : await this.getQueueDetail(id);
       this.queues.set(id, { processId, row, detail });
       out.push({ id, name: row.name ?? detail?.name ?? `Queue ${id}`, processId, managers: idAndName(fromRow ?? detail?.managers ?? []) });

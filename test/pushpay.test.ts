@@ -209,8 +209,9 @@ beforeEach(() => {
         process_id: 37,
         name: 'Connect Card Coordinators',
         order_by: 1,
-        managers: [{ id: 801, name: 'Leader One', email: 'leader1@example.com', phone: {} }],
-        queue_managers: [{ id: 803, name: 'Leader Three' }],
+        // As production sends them: `managers` is bare names, `queue_managers` is { id, name }.
+        managers: ['Leader One'],
+        queue_managers: [{ id: 801, name: 'Leader One', email: 'leader1@example.com', phone: {} }],
       },
       { id: 6001, process_id: 99, name: 'Other process', order_by: 1 },
     ],
@@ -244,7 +245,7 @@ describe('listQueues', () => {
       ['5001', 'Connect Card Coordinators', '37'],
       ['5002', 'Outreach Team', '37'],
     ]);
-    expect(queues[0]!.managers).toEqual([{ id: '801', name: 'Leader One' }]); // `managers` wins over `queue_managers`
+    expect(queues[0]!.managers).toEqual([{ id: '801', name: 'Leader One' }]); // from `queue_managers`; the bare names in `managers` are ignored
     expect(queues[1]!.managers).toEqual([]);
     expect(String(api.requests[0])).toBe(`${API}/queues?process_ids[]=37&per_page=100&page=1`);
     expect(paths()).toEqual(['/queues']); // no GET /queues/{id}

@@ -261,3 +261,5 @@ Items 13 onwards were added with the live implementation; each matches a `// SAN
 19. Are literal `[]` brackets required as the guide says, given the OpenAPI declares `statuses` as a plain exploded array? (We send literal `[]`.)
 20. Does the detail's `managers` ever come back empty while the list row has managers? (We fall back to the list row's `managers`/`queue_managers`.)
 21. Is `email` or `email_primary` the populated email field on nested individuals, and is the phone under `phone.mobile`, or under a `phones` array as in the guide's update response?
+- On `/queues` list rows, `queue_managers` is a list of `{ id, name }` and `managers` is a list of bare name strings. The app reads `queue_managers`. (`GET /queues/{id}` `managers` is `{ id, name }`.)
+- A process-wide open-status read also returns open-status rows sitting in the excluded DONE and Not Interested queues (about 325 of 399 on 2026-11-24); they are dropped after the read. A full snapshot is 5 calls and about 1.5 seconds.
