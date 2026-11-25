@@ -1,7 +1,7 @@
 // Builds the GET /api/me response (docs/ARCHITECTURE.md "JSON contract").
 import { computeNudges, queueIdsForKeys, type AdminResult } from '../core/behind';
 import { availableLeadPeople } from '../core/match';
-import { adminQueueUrl, individualUrl, isLive, leaderAccess, queueUrl } from '../core/config';
+import { adminQueueUrl, entryUrl, individualUrl, isLive, leaderAccess, queueUrl } from '../core/config';
 import { HOUR_MS, createdToInstant, dueToDate, zonedDate } from '../core/time';
 import type { HolyNudgeConfig, Queue, QueueEntry, Status } from '../core/types';
 import { errorClassName } from '../core/errors';
@@ -13,6 +13,8 @@ export interface ItemJson {
   queueId: string;
   queueName: string;
   queueUrl: string;
+  /** That student's own card in the queue (what "Open in ChMS" opens). Built from the entry id; no person id. */
+  entryUrl: string;
   status: Status;
   due: string | null;
   daysOverdue: number | null;
@@ -180,6 +182,7 @@ export function buildMe({ config, snapshot, leader, leaders, now }: BuildMeInput
       queueId: e.queueId,
       queueName: queueById.get(e.queueId)?.name ?? '',
       queueUrl: queueUrl(config, e.queueId),
+      entryUrl: entryUrl(config, e.id),
       status: e.status,
       due,
       daysOverdue: overdue,

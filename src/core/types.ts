@@ -73,6 +73,8 @@ export interface HolyNudgeConfig {
    */
   queueUrlTemplate?: string;
   /** Link to one person's Lead profile. Placeholders: {chmsBaseUrl}, {individualId}. Optional; see DEFAULT_INDIVIDUAL_URL_TEMPLATE. */
+  /** Link to one student's card in a queue; `{chmsBaseUrl}` and `{entryId}` are filled in. Optional (has a default). */
+  entryUrlTemplate?: string;
   individualUrlTemplate?: string;
   /** Admin-view link: one queue, one status, every assignee. Placeholders: {chmsBaseUrl} {queueId} {statusId}. */
   adminQueueUrlTemplate?: string;

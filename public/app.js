@@ -229,6 +229,7 @@
       queueId: queueId,
       queueName: queueName,
       queueUrl: 'https://example.com/queues/' + queueId,
+      entryUrl: 'https://example.com/cards/' + id,
       status: status,
       due: due,
       daysOverdue: daysOverdue,
@@ -1198,8 +1199,10 @@
       kids.push(h('a', { class: 'btn', href: 'sms:' + phone, 'aria-label': 'Text ' + (ind.name || '') }, 'Text'));
       kids.push(h('a', { class: 'btn', href: 'tel:' + phone, 'aria-label': 'Call ' + (ind.name || '') }, 'Call'));
     }
-    if (item.queueUrl) {
-      kids.push(h('a', { class: 'btn primary', href: item.queueUrl, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Open ' + (ind.name || 'this person') + ' in ChMS' }, 'Open in ChMS'));
+    // The student's own card in Lead; the queue page only if an older response has no card link.
+    var openUrl = item.entryUrl || item.queueUrl;
+    if (openUrl) {
+      kids.push(h('a', { class: 'btn primary', href: openUrl, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Open ' + (ind.name || 'this person') + ' in ChMS' }, 'Open in ChMS'));
     }
     return h('div', { class: 'actions' }, kids);
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, parseConfig, queueUrl, adminQueueUrl, individualUrl } from '../src/core/config';
+import { ConfigError, loadConfig, parseConfig, queueUrl, adminQueueUrl, entryUrl, individualUrl } from '../src/core/config';
 
 describe('config', () => {
   it('bundled config loads with the spec defaults', () => {
@@ -62,6 +62,13 @@ describe('config', () => {
     expect(() => parseConfig({ ...ok, individualUrlTemplate: '{chmsBaseUrl}/people' })).toThrow(/individualUrlTemplate/);
     expect(() => parseConfig({ ...ok, individualUrlTemplate: '{chmsBaseUrl}/people/{queueId}' })).toThrow(/individualUrlTemplate/);
     expect(() => parseConfig({ ...ok, individualUrlTemplate: 5 })).toThrow(/individualUrlTemplate/);
+    // A student's own card: the web individual_step_id is the API entry id (confirmed against Lead 2026-11-25).
+    expect('entryUrlTemplate' in ok).toBe(false);
+    expect(entryUrl(ok, '30353')).toBe('https://wildwood.ccbchurch.com/step_manage_ind.php?individual_step_id=30353');
+    expect(entryUrl(ok, 'a b&c')).toBe('https://wildwood.ccbchurch.com/step_manage_ind.php?individual_step_id=a%20b%26c');
+    expect(entryUrl(parseConfig({ ...ok, entryUrlTemplate: '{chmsBaseUrl}/cards/{entryId}' }), '9')).toBe('https://wildwood.ccbchurch.com/cards/9');
+    expect(() => parseConfig({ ...ok, entryUrlTemplate: '{chmsBaseUrl}/cards' })).toThrow(/entryUrlTemplate/);
+    expect(() => parseConfig({ ...ok, entryUrlTemplate: 5 })).toThrow(/entryUrlTemplate/);
   });
 
   it('builds admin queue links filtered by status across all assignees', () => {
