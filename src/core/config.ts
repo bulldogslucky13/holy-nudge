@@ -18,6 +18,19 @@ export function queueUrl(config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'queueUrl
     .replaceAll('{queueId}', encodeURIComponent(queueId));
 }
 
+/**
+ * One student's card in a queue, in the ChMS web UI. Confirmed against production 2026-11-25: the web
+ * `individual_step_id` is the API's `queue_individual_id` (our entry id), which the app already sends.
+ */
+export const DEFAULT_ENTRY_URL_TEMPLATE = '{chmsBaseUrl}/step_manage_ind.php?individual_step_id={entryId}';
+
+/** Deep link to one queue entry (a student's card), from config.entryUrlTemplate (or the default). */
+export function entryUrl(config: Pick<HolyNudgeConfig, 'chmsBaseUrl' | 'entryUrlTemplate'>, entryId: string): string {
+  return (config.entryUrlTemplate ?? DEFAULT_ENTRY_URL_TEMPLATE)
+    .replaceAll('{chmsBaseUrl}', config.chmsBaseUrl)
+    .replaceAll('{entryId}', encodeURIComponent(entryId));
+}
+
 /** A person's profile page in the ChMS web UI (confirmed against production 2026-11-24: /goto/individuals/<id> redirects to the profile). */
 export const DEFAULT_INDIVIDUAL_URL_TEMPLATE = '{chmsBaseUrl}/goto/individuals/{individualId}';
 
@@ -138,6 +151,13 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     }
     queueUrlTemplate = o.queueUrlTemplate;
   }
+  let entryUrlTemplate: string | undefined;
+  if (o.entryUrlTemplate !== undefined) {
+    if (typeof o.entryUrlTemplate !== 'string' || !o.entryUrlTemplate.includes('{entryId}')) {
+      fail('entryUrlTemplate must be a string containing {entryId}');
+    }
+    entryUrlTemplate = o.entryUrlTemplate;
+  }
   let individualUrlTemplate: string | undefined;
   if (o.individualUrlTemplate !== undefined) {
     if (typeof o.individualUrlTemplate !== 'string' || !o.individualUrlTemplate.includes('{individualId}')) {
@@ -164,6 +184,7 @@ export function parseConfig(input: unknown): HolyNudgeConfig {
     audience: audience as Audience,
     chmsBaseUrl: o.chmsBaseUrl.replace(/\/+$/, ''),
     ...(queueUrlTemplate !== undefined ? { queueUrlTemplate } : {}),
+    ...(entryUrlTemplate !== undefined ? { entryUrlTemplate } : {}),
     ...(individualUrlTemplate !== undefined ? { individualUrlTemplate } : {}),
     ...(adminQueueUrlTemplate !== undefined ? { adminQueueUrlTemplate } : {}),
   };

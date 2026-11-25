@@ -40,12 +40,14 @@ describe('GET /api/me response', () => {
         {
           entryId: 'e1', queueId: 'q1', queueName: 'Outreach',
           queueUrl: 'https://example.com/step_individuals.php?ax=my&step_id=q1',
+          entryUrl: 'https://example.com/step_manage_ind.php?individual_step_id=e1',
           status: 'IN_PROCESS', due: '2026-01-08', daysOverdue: 7,
           individual: { name: 'Pat Example', phone: '555-0101' },
         },
         {
           entryId: 'e2', queueId: 'q1', queueName: 'Outreach',
           queueUrl: 'https://example.com/step_individuals.php?ax=my&step_id=q1',
+          entryUrl: 'https://example.com/step_manage_ind.php?individual_step_id=e2',
           status: 'NOT_STARTED', due: '2026-01-20', daysOverdue: null,
           individual: { name: 'Sam', phone: null },
         },

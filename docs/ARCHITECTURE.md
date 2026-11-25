@@ -157,7 +157,7 @@ All API errors: `{ "error": "<code>" }` with 4xx/5xx. Invalid, missing or turned
   "live": true,
   "behind": [ {
     "entryId": "e1", "queueId": "q3", "queueName": "Outreach Team",
-    "queueUrl": "https://.../", "status": "NOT_STARTED",
+    "queueUrl": "https://.../", "entryUrl": "https://.../step_manage_ind.php?individual_step_id=...", "status": "NOT_STARTED",
     "due": "2026-11-10", "daysOverdue": 7,
     "individual": { "name": "Pat Example", "phone": "405-555-0101" }
   } ],
